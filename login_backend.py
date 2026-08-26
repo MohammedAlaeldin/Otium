@@ -1,4 +1,3 @@
-# backend/backend.py
 import base64
 import time
 import pyotp
@@ -12,7 +11,7 @@ def is_valid_base32(key: str) -> bool:
     if len(clean_key) not in (16, 32):
         return False
     try:
-        # Add padding if necessary for python base64 decoder
+        # Add padding for python base64 decoder
         padded_key = clean_key + "=" * (-len(clean_key) % 8)
         base64.b32decode(padded_key, casefold=True)
         return True
@@ -33,11 +32,10 @@ def validate_credentials_format(email: str, password: str, secret_key: str):
     return True, "Format valid"
 
 
-# REPLACE IN backend/backend.py:
 def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: str):
     """
-    Launches Playwright to perform authentication. Identifies the specific point of
-    failure (Email, Password, or TOTP) and handles different 2FA prompt layouts.
+    Launche playwright to perform authentication. Identifies the specific point of
+    failure and handles 2FA prompt layouts.
     """
     clean_secret = totp_secret.replace(" ", "").strip()
     totp = pyotp.TOTP(clean_secret)
@@ -49,7 +47,7 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
         page = context.new_page()
 
         try:
-            # --- STAGE 1: NAVIGATION & EMAIL ---
+            #1)NAVIGATION & EMAIL
             page.goto("https://ebwise.mmu.edu.my/login/index.php", timeout=30000)
 
             try:
@@ -65,12 +63,12 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
             page.click('input[type="submit"]')
 
             time.sleep(2)
-            # Check for invalid email rejection
+            # Check for invalid email
             if page.is_visible("#usernameError") or page.is_visible('text="Enter a valid email address"') or page.is_visible('text="That Microsoft account doesn\'t exist"'):
                 browser.close()
                 return False, "EMAIL_ERROR: Microsoft rejected this email address."
 
-            # --- STAGE 2: PASSWORD ---
+            #2)Password
             try:
                 page.wait_for_selector('input[type="password"]', timeout=10000)
             except Exception:
@@ -82,30 +80,30 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
             page.click('input[type="submit"]')
 
             time.sleep(2.5)
-            # Check for incorrect password rejection
+            # Check for incorrect password
             if page.is_visible("#passwordError") or page.is_visible('text="Your account or password is incorrect"'):
                 browser.close()
                 return False, "PASSWORD_ERROR: Incorrect password."
 
-            # --- STAGE 3: 2FA SCREEN HANDLING (3-Step Fallback Sequence) ---
+            #3) 2FA SCREEN HANDLING
             print("⏳ Navigating 2FA screen...")
             time.sleep(2)
 
-            # Fallback 1: Click "I can't use my Microsoft Authenticator app right now"
+            # 1: Click "I can't use my Microsoft Authenticator app right now"
             try:
                 page.click('text="I can\'t use my Microsoft Authenticator app right now"', timeout=3000)
                 time.sleep(1)
             except Exception:
                 pass
 
-            # Fallback 2: Click "Use a verification code"
+            # 2: Click "Use a verification code"
             try:
                 page.click('text="Use a verification code"', timeout=3000)
                 time.sleep(1)
             except Exception:
                 pass
 
-            # Fallback 3: Check if input field is ready, or try clicking option list item
+            # 3: Check if input field is ready, or try clicking option list item
             try:
                 if not page.is_visible('input[name="otc"]'):
                     # Try clicking option list element containing 'verification code' text
@@ -120,7 +118,7 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
                 browser.close()
                 return False, "TOTP_ERROR: Unable to reach 2FA code entry field. Key may not be activated."
 
-            # --- STAGE 4: SUBMIT TOTP CODE ---
+            #4) SUBMIT TOTP CODE
             time_left = 30 - (int(time.time()) % 30)
             if time_left < 3:
                 time.sleep(time_left + 0.5)
@@ -143,17 +141,17 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
                 browser.close()
                 return False, "TOTP_ERROR: Microsoft rejected the code. Key may not be activated."
 
-                # Handle "Stay signed in?" prompt if it appears
+                # Handle "Stay signed in?" prompt
             try:
                 if page.is_visible('input[id="idSIButton9"]'):
                     page.click('input[id="idSIButton9"]')
             except Exception:
                 pass
 
-                # --- STAGE 5: STRICT VERDICT CHECK ---
+                #5) STRICT VERDICT CHECK
             print("⏳ Waiting for redirection back to eBwise...")
             try:
-                    # Wait explicitly for Playwright to redirect back to MMU eBwise domain
+                    # Wait for Playwright to redirect back to MMU eBwise domain
                 page.wait_for_url(lambda url: "ebwise.mmu.edu.my" in url and "login" not in url, timeout=12000)
             except Exception:
                     # If we are still stuck on Microsoft's domain, the 2FA failed
