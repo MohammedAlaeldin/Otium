@@ -59,3 +59,4 @@ class SimpleOutlookBackend:
             return res.json().get("value", [])
         else:
             raise Exception(f"API Error {res.status_code}: {res.text}")
+#
