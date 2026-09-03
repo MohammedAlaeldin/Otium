@@ -1,9 +1,14 @@
 import threading
 import customtkinter as ctk
+import sys
+import os
+
+# Ensure the app can find outlook_backend in the parent directory
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from outlook_backend import SimpleOutlookBackend
 
 
-class OutlookViewFrame(ctk.CTkFrame):
+class OutlookView(ctk.CTkFrame):
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
 
@@ -54,7 +59,7 @@ class OutlookViewFrame(ctk.CTkFrame):
             card = ctk.CTkFrame(self.scroll_frame, fg_color="#252526", corner_radius=8)
             card.pack(fill="x", padx=10, pady=6)
 
-            # Extract data safely (handling both Graph and REST API key casing)
+            # Extract data safely
             subject = msg.get("subject") or msg.get("Subject") or "(No Subject)"
             sender_obj = (msg.get("sender") or msg.get("Sender") or {}).get("emailAddress") or {}
             sender_name = sender_obj.get("name") or sender_obj.get("Name") or "Unknown Sender"
@@ -74,16 +79,13 @@ class OutlookViewFrame(ctk.CTkFrame):
 
             ctk.CTkLabel(card, text=subject, font=ctk.CTkFont(size=13), text_color="#0078D4", anchor="w").pack(fill="x",
                                                                                                                padx=15,
-                                                                                                               pady=(2,
-                                                                                                                     0))
+                                                                                                               pady=(2, 0))
             ctk.CTkLabel(card, text=preview, font=ctk.CTkFont(size=12), text_color="#A0A0A0", anchor="w").pack(fill="x",
                                                                                                                padx=15,
-                                                                                                               pady=(2,
-                                                                                                                     12))
+                                                                                                               pady=(2, 12))
 
     def show_error(self, err_msg):
         self.loading_lbl.configure(
             text=f"⚠️ Failed to fetch emails:\n{err_msg}",
             text_color="#F44336"
         )
-#

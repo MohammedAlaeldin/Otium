@@ -3,7 +3,8 @@ import os
 import requests
 from playwright.async_api import async_playwright
 
-SESSION_FILE = "session.json"
+# Dynamically import the correct session path from your storage module
+from storage import SESSION_FILE
 
 
 class SimpleOutlookBackend:
@@ -13,7 +14,7 @@ class SimpleOutlookBackend:
     async def _get_token_silently(self):
         """Intercepts the Bearer token in the background."""
         if not os.path.exists(SESSION_FILE):
-            raise FileNotFoundError("session.json missing! Please log in first.")
+            raise FileNotFoundError(f"Session missing at {SESSION_FILE}! Please log in first.")
 
         token_future = asyncio.Future()
         async with async_playwright() as p:
@@ -40,7 +41,6 @@ class SimpleOutlookBackend:
 
     def fetch_recent_emails(self, limit=10):
         """Fetches emails from Microsoft Graph API using the token."""
-        # Grab token if we don't have it yet
         if not self.token:
             asyncio.run(self._get_token_silently())
 
@@ -59,4 +59,3 @@ class SimpleOutlookBackend:
             return res.json().get("value", [])
         else:
             raise Exception(f"API Error {res.status_code}: {res.text}")
-#
