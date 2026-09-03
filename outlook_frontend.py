@@ -86,3 +86,4 @@ class OutlookViewFrame(ctk.CTkFrame):
             text=f"⚠️ Failed to fetch emails:\n{err_msg}",
             text_color="#F44336"
         )
+#
