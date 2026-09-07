@@ -6,9 +6,9 @@ import storage
 from views.home_view import HomeView
 from views.outlook_view import OutlookView
 from views.teams_view import TeamsView
+from views.ebwise_view import EbwiseView
 
 from ebwise_backend import fetch_ebwise_data
-from ebwise_frontend import EbwiseView
 from storage import clear_all_saved_data
 
 class DashboardWindow(ctk.CTkFrame):
