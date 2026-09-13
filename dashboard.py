@@ -94,6 +94,10 @@ class DashboardWindow(ctk.CTkFrame):
         elif status == "EXPIRED":
             self.sync_status_label.configure(text="⚠️ Session Expired", text_color="#F44336")
             self.logout()
+        elif status == "NO_TOKEN":
+            # Session itself is fine — we just couldn't get/use a Moodle web service
+            # token. Don't wipe credentials/session over this; just surface it.
+            self.sync_status_label.configure(text="⚠️ API token unavailable", text_color="#F44336")
         else:
             self.sync_status_label.configure(text="⚠️ Sync Failed", text_color="#F44336")
 
