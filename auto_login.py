@@ -64,6 +64,41 @@ async def sync_outlook(context):
         print(f"⚠️ Outlook sync warning: {e}")
 
 
+async def _try_check_persist_checkbox(page):
+    """Checks a 'Don't ask again for N days' / 'Don't show this again' checkbox if one
+    is present on the current Microsoft login step, so future logins reuse the trusted
+    device instead of forcing a full 2FA challenge again."""
+    known_selectors = [
+        '#idChkBx_SAOTCC_TD',  # "Don't ask again for N days" on the MFA/OTP step
+        '#KmsiCheckboxField',  # "Don't show this again" on the "Stay signed in?" step
+    ]
+    for sel in known_selectors:
+        try:
+            checkbox = page.locator(sel)
+            if await checkbox.is_visible(timeout=1000):
+                if not await checkbox.is_checked():
+                    await checkbox.check()
+                    print(f"☑️ Checked persistence checkbox: {sel}")
+                return True
+        except Exception:
+            continue
+
+    # Fallback in case Microsoft changes the element id: find any checkbox near
+    # text mentioning "don't ask again" / "don't show this again".
+    try:
+        label = page.locator("text=/don't ask again|don't show this again/i").first
+        if await label.is_visible(timeout=1000):
+            checkbox = label.locator("xpath=preceding::input[@type='checkbox'][1]")
+            if await checkbox.count() > 0 and not await checkbox.is_checked():
+                await checkbox.check()
+                print("☑️ Checked persistence checkbox via text fallback")
+                return True
+    except Exception:
+        pass
+
+    return False
+
+
 async def authenticate_with_credentials(page, email: str, password: str, totp_secret: str) -> bool:
     """Full Microsoft 2FA login flow if session is expired or missing."""
     totp = pyotp.TOTP(totp_secret)
@@ -130,11 +165,13 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
         await asyncio.sleep(time_left + 0.5)
 
     await page.fill('input[name="otc"]', totp.now())
+    await _try_check_persist_checkbox(page)
     await page.click('input[type="submit"], input[id="idSIButton9"]')
     await asyncio.sleep(3)
 
     try:
         if await page.is_visible('input[id="idSIButton9"]'):
+            await _try_check_persist_checkbox(page)
             await page.click('input[id="idSIButton9"]')
     except Exception:
         pass

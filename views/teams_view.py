@@ -1,5 +1,6 @@
 import customtkinter as ctk
 import threading
+import webbrowser
 from datetime import datetime, timedelta, timezone
 import teams_backend
 
@@ -26,16 +27,30 @@ def parse_teams_time(ts):
     except Exception:
         return datetime.min.replace(tzinfo=timezone.utc)
 
+def open_in_browser(url: str):
+    """Forces Microsoft Teams links to stay inside the web browser instead of launching the desktop app."""
+    if not url:
+        return
+    
+    web_url = url
+    # Append web=1 query parameter to prevent protocol handler redirect to native app
+    if "teams.microsoft.com" in web_url:
+        if "?" in web_url:
+            web_url += "&web=1"
+        else:
+            web_url += "?web=1"
+            
+    webbrowser.open_new_tab(web_url)
+
 class TeamsView(ctk.CTkFrame):
     def __init__(self, master, **kwargs):
-        super().__init__(master, fg_color="transparent", **kwargs)
+        super().__init__(master, fg_color="#7007d2", **kwargs)
         
-        #Loading Screen
         self.loading_label = ctk.CTkLabel(
             self, 
             text="Syncing Microsoft Teams Data...\nThis takes about 15 seconds.", 
             font=ctk.CTkFont(size=20, weight="bold"), 
-            text_color="#1f6aa5"
+            text_color="#030506"
         )
         self.loading_label.place(relx=0.5, rely=0.5, anchor="center")
 
@@ -43,7 +58,6 @@ class TeamsView(ctk.CTkFrame):
 
     def pack(self, **kwargs):
         super().pack(**kwargs)
-        # Fetch data in background only when the user clicks the Teams tab
         if not self.data_loaded:
             threading.Thread(target=self.fetch_and_render, daemon=True).start()
 
@@ -58,8 +72,8 @@ class TeamsView(ctk.CTkFrame):
         left_container = ctk.CTkFrame(self, fg_color="transparent")
         left_container.place(relx=0.02, rely=0.02, relwidth=0.55, relheight=0.96)
 
-        # 1.ACTIVITY
-        activity_card = ctk.CTkFrame(left_container, fg_color="#2b2b2b", corner_radius=10)
+        # 1. ACTIVITY CARD
+        activity_card = ctk.CTkFrame(left_container, fg_color="#55089d", corner_radius=10)
         activity_card.place(relx=0, rely=0.0, relwidth=1.0, relheight=0.31)
         ctk.CTkLabel(activity_card, text="ACTIVITY", font=ctk.CTkFont(size=18, weight="bold")).place(relx=0.05, rely=0.05)
         
@@ -80,8 +94,8 @@ class TeamsView(ctk.CTkFrame):
         else:
             ctk.CTkLabel(act_scroll, text="No recent activity found.", text_color="gray").pack(pady=10)
 
-        # 2.MEETINGS AND CALLS
-        meetings_card = ctk.CTkFrame(left_container, fg_color="#2b2b2b", corner_radius=10)
+        # 2. MEETINGS & CALLS CARD (UPDATED: FORCE WEB BROWSER REDIRECT)
+        meetings_card = ctk.CTkFrame(left_container, fg_color="#55089d", corner_radius=10)
         meetings_card.place(relx=0, rely=0.34, relwidth=1.0, relheight=0.31)
         ctk.CTkLabel(meetings_card, text="MEETINGS & CALLS", font=ctk.CTkFont(size=18, weight="bold")).place(relx=0.05, rely=0.05)
         
@@ -101,13 +115,13 @@ class TeamsView(ctk.CTkFrame):
                     meet_frame = ctk.CTkFrame(meet_scroll, fg_color="#b57a14", corner_radius=6) 
                     meet_frame.pack(fill="x", pady=2)
                     ctk.CTkLabel(meet_frame, text=f"⏳ SCHEDULED: {meet['title']} ({local_time_str})", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=10, pady=10)
-                    ctk.CTkButton(meet_frame, text="JOIN CALL", fg_color="#82560d", width=90, height=28, command=lambda url=meet['join_url']: print(f"Opening: {url}")).pack(side="right", padx=10)
+                    ctk.CTkButton(meet_frame, text="JOIN CALL", fg_color="#82560d", width=90, height=28, command=lambda url=meet['join_url']: open_in_browser(url)).pack(side="right", padx=10)
                                   
                 elif now_utc <= start_dt_utc + timedelta(minutes=150):
                     meet_frame = ctk.CTkFrame(meet_scroll, fg_color="#1f6aa5", corner_radius=6) 
                     meet_frame.pack(fill="x", pady=2)
                     ctk.CTkLabel(meet_frame, text=f"🔴 LIVE: {meet['title']} ({local_time_str})", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=10, pady=10)
-                    ctk.CTkButton(meet_frame, text="JOIN CALL", fg_color="#144870", width=90, height=28, command=lambda url=meet['join_url']: print(f"Opening: {url}")).pack(side="right", padx=10)
+                    ctk.CTkButton(meet_frame, text="JOIN CALL", fg_color="#144870", width=90, height=28, command=lambda url=meet['join_url']: open_in_browser(url)).pack(side="right", padx=10)
                                   
                 else:
                     meet_frame = ctk.CTkFrame(meet_scroll, fg_color="#222222", corner_radius=6) 
@@ -116,14 +130,14 @@ class TeamsView(ctk.CTkFrame):
         else:
             ctk.CTkLabel(meet_scroll, text="No meetings or calls found.", text_color="gray").pack(pady=10)
 
-        # 3.ASSIGNMENTS CARD
-        assignments_card = ctk.CTkFrame(left_container, fg_color="#2b2b2b", corner_radius=10)
+        # 3. ASSIGNMENTS CARD
+        assignments_card = ctk.CTkFrame(left_container, fg_color="#55089d", corner_radius=10)
         assignments_card.place(relx=0, rely=0.68, relwidth=1.0, relheight=0.31)
         ctk.CTkLabel(assignments_card, text="ASSIGNMENTS", font=ctk.CTkFont(size=18, weight="bold")).place(relx=0.05, rely=0.05)
         ctk.CTkLabel(assignments_card, text="No assignments due! 🎉", text_color="gray").place(relx=0.5, rely=0.5, anchor="center")
 
-        # 4.CALENDAR
-        calendar_card = ctk.CTkFrame(self, fg_color="#2b2b2b", corner_radius=10)
+        # 4. CALENDAR CARD 
+        calendar_card = ctk.CTkFrame(self, fg_color="#55089d", corner_radius=10)
         calendar_card.place(relx=0.6, rely=0.02, relwidth=0.38, relheight=0.96)
         ctk.CTkLabel(calendar_card, text="CALENDAR", font=ctk.CTkFont(size=18, weight="bold")).place(relx=0.05, rely=0.03)
 

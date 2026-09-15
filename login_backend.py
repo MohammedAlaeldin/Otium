@@ -32,6 +32,38 @@ def validate_credentials_format(email: str, password: str, secret_key: str):
     return True, "Format valid"
 
 
+def _try_check_persist_checkbox(page):
+    """Checks a 'Don't ask again for N days' / 'Don't show this again' checkbox if one
+    is present on the current Microsoft login step, so future logins reuse the trusted
+    device instead of forcing a full 2FA challenge again."""
+    known_selectors = [
+        '#idChkBx_SAOTCC_TD',  # "Don't ask again for N days" on the MFA/OTP step
+        '#KmsiCheckboxField',  # "Don't show this again" on the "Stay signed in?" step
+    ]
+    for sel in known_selectors:
+        try:
+            checkbox = page.locator(sel)
+            if checkbox.is_visible(timeout=1000):
+                if not checkbox.is_checked():
+                    checkbox.check()
+                    print(f"☑️ Checked persistence checkbox: {sel}")
+                return True
+        except Exception:
+            continue
+
+    try:
+        label = page.locator("text=/don't ask again|don't show this again/i").first
+        if label.is_visible(timeout=1000):
+            checkbox = label.locator("xpath=preceding::input[@type='checkbox'][1]")
+            if checkbox.count() > 0 and not checkbox.is_checked():
+                checkbox.check()
+                print("☑️ Checked persistence checkbox via text fallback")
+                return True
+    except Exception:
+        pass
+
+    return False
+
 def sync_additional_services(context):
     """Primes Teams and Outlook sessions using the active SSO context."""
     print("🌐 Synchronizing auth state for Teams and Outlook...")
@@ -153,6 +185,7 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
             print(f"🔢 Submitting TOTP Code: {current_code}")
 
             otc_input.fill(current_code)
+            _try_check_persist_checkbox(page)
             page.locator('input[type="submit"]').click()
 
             time.sleep(2)
@@ -169,6 +202,7 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
             stay_signed_in_btn = page.locator('input[id="idSIButton9"]').or_(page.locator('input[value="Yes"]'))
             try:
                 stay_signed_in_btn.wait_for(state="visible", timeout=5000)
+                _try_check_persist_checkbox(page)
                 stay_signed_in_btn.click()
             except Exception:
                 pass
