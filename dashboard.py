@@ -76,6 +76,7 @@ class DashboardWindow(ctk.CTkFrame):
         self.show_view("Home")
         self.refresh_live_data()
 
+
     def refresh_live_data(self, classification: str = "inprogress", selected_filter: str = "In Progress"):
         """Starts background thread to pull eBwise data with the specified filter."""
         self.sync_status_label.configure(text="Syncing eBwise...", text_color="#FFA500")

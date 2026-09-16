@@ -235,7 +235,6 @@ def fetch_ebwise_data(classification: str = "inprogress") -> dict:
         print(f"⚠️ Web service API error: {e}")
         return {"status": "FAILED", "error": str(e)}
 
-
 if __name__ == "__main__":
     result = fetch_ebwise_data()
     print(json.dumps(result, indent=2))
