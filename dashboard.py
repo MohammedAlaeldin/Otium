@@ -20,7 +20,7 @@ class DashboardWindow(ctk.CTkFrame):
         self.sidebar_visible = False
         self.sidebar_width = 180
 
-        # --- Top Header Bar ---
+        #  Top Header Bar 
         self.header = ctk.CTkFrame(self, height=50, corner_radius=0)
         self.header.pack(fill="x", side="top")
         self.header.pack_propagate(False)
