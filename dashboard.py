@@ -63,7 +63,11 @@ class DashboardWindow(ctk.CTkFrame):
         self.container = ctk.CTkFrame(self.body, corner_radius=0, fg_color="transparent")
         self.container.pack(side="right", fill="both", expand=True)
 
+<<<<<<< HEAD
         # Initialize Views
+=======
+        # SINGLE INITIALIZATION ONLY: Pass self.refresh_live_data callback here
+>>>>>>> bb7ffd6b63e53fb65c262aa9184a630b674d3beb
         self.views = {
             "Home": HomeView(self.container),
             "Ebwise": EbwiseView(self.container, fetch_callback=self.refresh_live_data),
@@ -75,6 +79,7 @@ class DashboardWindow(ctk.CTkFrame):
         self.show_view("Home")
         self.refresh_live_data()
 
+<<<<<<< HEAD
     def toggle_sidebar(self):
         """Instant toggle without loop-based layout thrashing/glitches."""
         if self.sidebar_visible:
@@ -84,6 +89,11 @@ class DashboardWindow(ctk.CTkFrame):
         self.sidebar_visible = not self.sidebar_visible
 
     def refresh_live_data(self, classification: str = "inprogress", selected_filter: str = "In Progress"):
+=======
+
+    def refresh_live_data(self, classification: str = "inprogress", selected_filter: str = "In Progress"):
+        """Starts background thread to pull eBwise data with the specified filter."""
+>>>>>>> bb7ffd6b63e53fb65c262aa9184a630b674d3beb
         self.sync_status_label.configure(text="Syncing eBwise...", text_color="#FFA500")
         threading.Thread(
             target=self._worker_fetch_data,
@@ -110,7 +120,6 @@ class DashboardWindow(ctk.CTkFrame):
             self.sync_status_label.configure(text="⚠️ API token unavailable", text_color="#F44336")
         else:
             self.sync_status_label.configure(text="⚠️ Sync Failed", text_color="#F44336")
-
     def _build_sidebar_menu(self):
         nav_items = ["Home", "Ebwise", "Outlook", "Teams"]
 
