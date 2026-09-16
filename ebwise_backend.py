@@ -31,7 +31,6 @@ def _get_official_app_token(session: requests.Session, state: dict) -> str | Non
     if cached:
         return cached
 
-    # Launch endpoint requested by Moodle Mobile App
     launch_url = f"{EBWISE_BASE_URL}/admin/tool/mobile/launch.php"
     params = {
         "service": "moodle_mobile_app",
@@ -53,32 +52,25 @@ def _get_official_app_token(session: requests.Session, state: dict) -> str | Non
 
         candidate_tokens = []
 
-        # 1. Extract the raw value after 'token=' in the redirect URL
         token_param_match = re.search(r"token=([^&]+)", location)
         if token_param_match:
             raw_val = token_param_match.group(1)
 
-            # Case A: Directly a 32-char hex string
             if re.match(r"^[a-f0-9]{32}$", raw_val):
                 candidate_tokens.append(raw_val)
             else:
-                # Case B: Base64-encoded string containing 'wstoken:::privateToken'
                 try:
                     padded_val = raw_val + "=" * ((4 - len(raw_val) % 4) % 4)
                     decoded = base64.b64decode(padded_val).decode("utf-8")
-
-                    # Extract ALL 32-char hex strings from the decoded string
                     hex_matches = re.findall(r"[a-f0-9]{32}", decoded)
                     candidate_tokens.extend(hex_matches)
                 except Exception as e:
                     print(f"⚠️ Base64 decode failed: {e}")
 
-        # 2. Fallback: Search anywhere in the Location header for a 32-char hex string
         if not candidate_tokens:
             hex_matches = re.findall(r"[a-f0-9]{32}", location)
             candidate_tokens.extend(hex_matches)
 
-        # 3. Test candidates against Moodle's server to find the real wstoken
         valid_wstoken = None
         for candidate in candidate_tokens:
             try:
@@ -89,7 +81,6 @@ def _get_official_app_token(session: requests.Session, state: dict) -> str | Non
                 }
                 test_res = session.post(REST_ENDPOINT, data=test_payload, timeout=10).json()
 
-                # If Moodle throws an exception (like 'invalidtoken'), skip to the next candidate
                 if isinstance(test_res, dict) and test_res.get("exception"):
                     continue
 
@@ -111,6 +102,7 @@ def _get_official_app_token(session: requests.Session, state: dict) -> str | Non
     except Exception as e:
         print(f"⚠️ Token generation request failed: {e}")
         return None
+
 
 def _ws_call(session: requests.Session, wstoken: str, wsfunction: str, **params):
     """Generic caller for Moodle's webservice/rest/server.php."""
@@ -136,9 +128,8 @@ def _attach_token(fileurl: str, wstoken: str) -> str:
     return f"{fileurl}{sep}token={wstoken}"
 
 
-def fetch_ebwise_data() -> dict:
-    """Fetches active in-progress courses and their resources purely via
-    Moodle's Web Service REST API — mimicking the official mobile app."""
+def fetch_ebwise_data(classification: str = "inprogress") -> dict:
+    """Fetches active, future, or past courses and their resources based on the chosen filter classification."""
     if not os.path.exists(SESSION_FILE):
         return {"status": "EXPIRED"}
 
@@ -155,7 +146,6 @@ def fetch_ebwise_data() -> dict:
         if not wstoken:
             return {"status": "NO_TOKEN"}
 
-        # Sanity check the token; if invalid, purge cache and retry
         try:
             site_info = _ws_call(session, wstoken, "core_webservice_get_site_info")
         except RuntimeError as e:
@@ -165,7 +155,6 @@ def fetch_ebwise_data() -> dict:
                 with open(SESSION_FILE, "w") as f:
                     json.dump(state, f, indent=2)
 
-                # Fetch fresh token and try again
                 wstoken = _get_official_app_token(session, state)
                 if not wstoken:
                     return {"status": "NO_TOKEN"}
@@ -175,10 +164,11 @@ def fetch_ebwise_data() -> dict:
 
         print(f"🔑 wstoken valid for user: {site_info.get('fullname')}")
 
+        # Fetch courses based on the filter ('inprogress', 'future', 'past', 'all')
         courses_res = _ws_call(
             session, wstoken,
             "core_course_get_enrolled_courses_by_timeline_classification",
-            classification="inprogress", limit=0, offset=0,
+            classification=classification, limit=0, offset=0,
         )
         course_list = courses_res.get("courses", [])
 
@@ -207,7 +197,6 @@ def fetch_ebwise_data() -> dict:
 
                     module_contents = module.get("contents") or []
                     if module_contents:
-                        # Real files (resource/folder modules etc.)
                         for c in module_contents:
                             fileurl = c.get("fileurl")
                             if fileurl:
@@ -219,7 +208,6 @@ def fetch_ebwise_data() -> dict:
                                 "type": modname,
                             })
                     else:
-                        # Non-file activities (url, assign, forum, etc.)
                         mod_url = module.get("url")
                         if mod_url:
                             files.append({

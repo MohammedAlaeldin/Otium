@@ -2,42 +2,76 @@ import webbrowser
 import customtkinter as ctk
 
 
-class EbwiseView(ctk.CTkFrame):
-    def __init__(self, master, **kwargs):
-        super().__init__(master, **kwargs)
+class CollapsibleFrame(ctk.CTkFrame):
+    """Custom expandable card component with a toggle icon."""
 
-        # Title Header
-        self.header_label = ctk.CTkLabel(
-            self,
-            text="eBwise Dashboard",
-            font=ctk.CTkFont(size=20, weight="bold")
+    def __init__(self, master, title="Section", **kwargs):
+        super().__init__(master, fg_color="#2B2B2B", **kwargs)
+        self.is_expanded = True
+
+        # Header bar (clickable to toggle)
+        self.header_frame = ctk.CTkFrame(self, fg_color="#1E1E1E", cursor="hand2")
+        self.header_frame.pack(fill="x", expand=True)
+        self.header_frame.bind("<Button-1>", lambda e: self.toggle())
+
+        self.title_lbl = ctk.CTkLabel(
+            self.header_frame,
+            text=title,
+            font=ctk.CTkFont(size=14, weight="bold")
         )
-        self.header_label.pack(anchor="w", padx=20, pady=(20, 10))
+        self.title_lbl.pack(side="left", padx=15, pady=10)
+        self.title_lbl.bind("<Button-1>", lambda e: self.toggle())
+
+        self.toggle_lbl = ctk.CTkLabel(
+            self.header_frame,
+            text="▲",
+            font=ctk.CTkFont(size=14, weight="bold")
+        )
+        self.toggle_lbl.pack(side="right", padx=15, pady=10)
+        self.toggle_lbl.bind("<Button-1>", lambda e: self.toggle())
+
+        # Container for internal elements
+        self.content_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.content_frame.pack(fill="x", expand=True, padx=10, pady=10)
+
+    def toggle(self):
+        if self.is_expanded:
+            self.content_frame.pack_forget()
+            self.toggle_lbl.configure(text="▼")
+            self.is_expanded = False
+        else:
+            self.content_frame.pack(fill="x", expand=True, padx=10, pady=10)
+            self.toggle_lbl.configure(text="▲")
+            self.is_expanded = True
+
+
+class EbwiseView(ctk.CTkFrame):
+    def __init__(self, master, fetch_callback=None, **kwargs):
+        super().__init__(master, **kwargs)
+        self.fetch_callback = fetch_callback  # Function to request new backend data
+        self.cached_data = {}
 
         # Main Scrollable Container
         self.scroll_container = ctk.CTkScrollableFrame(self)
-        self.scroll_container.pack(fill="both", expand=True, padx=20, pady=10)
+        self.scroll_container.pack(fill="both", expand=True, padx=20, pady=20)
 
-        # Default Placeholder
-        self.status_card = ctk.CTkFrame(self.scroll_container, fg_color="#2B2B2B")
-        self.status_card.pack(fill="x", pady=10, padx=5)
+        # Default loading state
+        self.show_loading()
 
-        self.placeholder_label = ctk.CTkLabel(
-            self.status_card,
-            text="⏳ Loading live eBwise data...",
-            font=ctk.CTkFont(size=14)
-        )
-        self.placeholder_label.pack(pady=15)
-
-    def update_data(self, data: dict):
-        """Populates UI dynamically with courses, files, and deadlines."""
-        # Clear placeholder or old widgets
+    def show_loading(self):
         for widget in self.scroll_container.winfo_children():
             widget.destroy()
+        lbl = ctk.CTkLabel(self.scroll_container, text="⏳ Loading live eBwise data...", font=ctk.CTkFont(size=14))
+        lbl.pack(pady=40)
 
+    def update_data(self, data: dict, selected_filter: str = "In Progress"):
+        """Entry point called when backend returns updated course payload."""
+        self.cached_data = data
         status = data.get("status")
 
         if status != "SUCCESS":
+            for widget in self.scroll_container.winfo_children():
+                widget.destroy()
             error_label = ctk.CTkLabel(
                 self.scroll_container,
                 text=f"⚠️ Failed to load data (Status: {status})",
@@ -47,119 +81,152 @@ class EbwiseView(ctk.CTkFrame):
             error_label.pack(pady=20)
             return
 
-        courses = data.get("courses", [])
-        upcoming = data.get("upcoming", [])
+        # Pass selected_filter down to render_course_grid
+        self.render_course_grid(selected_filter=selected_filter)
 
-        # --- Enrolled Courses Section ---
-        courses_header = ctk.CTkLabel(
-            self.scroll_container,
-            text=f"📚 Enrolled Courses ({len(courses)})",
-            font=ctk.CTkFont(size=16, weight="bold")
+    # --- SCREEN 1: COURSE GRID & TIMELINE FILTER ---
+    def render_course_grid(self, selected_filter: str = "In Progress"):
+        for widget in self.scroll_container.winfo_children():
+            widget.destroy()
+
+        top_bar = ctk.CTkFrame(self.scroll_container, fg_color="transparent")
+        top_bar.pack(fill="x", pady=(0, 20))
+
+        filter_options = ["In Progress", "Future", "Past", "All"]
+        self.filter_dropdown = ctk.CTkOptionMenu(
+            top_bar,
+            values=filter_options,
+            command=self._on_filter_change,
+            width=160
         )
-        courses_header.pack(anchor="w", pady=(10, 5))
+        self.filter_dropdown.set(selected_filter)
+        self.filter_dropdown.pack(side="left")
+
+        courses = self.cached_data.get("courses", [])
 
         if not courses:
-            no_courses_lbl = ctk.CTkLabel(self.scroll_container, text="No active courses found.")
-            no_courses_lbl.pack(anchor="w", padx=10)
+            no_courses_lbl = ctk.CTkLabel(
+                self.scroll_container,
+                text="No courses found for this filter classification."
+            )
+            no_courses_lbl.pack(anchor="w", pady=20)
+            return
 
-        for course in courses:
-            # Main Course Container Card
-            course_card = ctk.CTkFrame(self.scroll_container, fg_color="#2B2B2B")
-            course_card.pack(fill="x", pady=8, padx=5)
+        grid_frame = ctk.CTkFrame(self.scroll_container, fg_color="transparent")
+        grid_frame.pack(fill="both", expand=True)
 
-            # Course Title
-            lbl = ctk.CTkLabel(
-                course_card,
+        grid_frame.columnconfigure((0, 1, 2), weight=1, uniform="course_cols")
+
+        for idx, course in enumerate(courses):
+            row = idx // 3
+            col = idx % 3
+
+            card = ctk.CTkFrame(grid_frame, fg_color="#2B2B2B", height=180, cursor="hand2")
+            card.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
+            card.grid_propagate(False)
+
+            card.bind("<Button-1>", lambda e, c=course: self.render_course_details(c))
+
+            title_lbl = ctk.CTkLabel(
+                card,
                 text=course.get("fullname", "Unknown Course"),
-                font=ctk.CTkFont(size=14, weight="bold")
+                font=ctk.CTkFont(size=15, weight="bold"),
+                wraplength=180,
+                justify="center"
             )
-            lbl.pack(anchor="w", padx=15, pady=(12, 6))
+            title_lbl.pack(expand=True, padx=15, pady=15)
+            title_lbl.bind("<Button-1>", lambda e, c=course: self.render_course_details(c))
 
-            files = course.get("files", [])
-            print(f"🔍 DEBUG [{course.get('fullname')}]: Found {len(files)} files ->", files)
+    def _on_filter_change(self, selected_value: str):
+        mapping = {
+            "In Progress": "inprogress",
+            "Future": "future",
+            "Past": "past",
+            "All": "all"
+        }
+        target_class = mapping.get(selected_value, "inprogress")
 
-            # Render Materials Container
-            if files:
-                files_container = ctk.CTkFrame(course_card, fg_color="#1E1E1E")
-                files_container.pack(fill="x", padx=15, pady=(0, 12))
+        if self.fetch_callback:
+            self.show_loading()
+            # Pass both target classification and the display filter string
+            self.fetch_callback(classification=target_class, selected_filter=selected_value)
+    # --- SCREEN 2: EXPANDABLE COURSE DETAILS ---
+    def render_course_details(self, course: dict):
+        for widget in self.scroll_container.winfo_children():
+            widget.destroy()
 
-                files_title = ctk.CTkLabel(
-                    files_container,
-                    text="📁 Course Materials & Resources:",
-                    font=ctk.CTkFont(size=11, weight="bold"),
-                    text_color="#AAAAAA"
-                )
-                files_title.pack(anchor="w", padx=10, pady=(8, 4))
+        # Navigation / Header
+        nav_bar = ctk.CTkFrame(self.scroll_container, fg_color="transparent")
+        nav_bar.pack(fill="x", pady=(0, 15))
 
-                for file_item in files:
-                    file_row = ctk.CTkFrame(files_container, fg_color="transparent")
-                    file_row.pack(fill="x", padx=10, pady=2)
-
-                    # Extract display name with robust fallbacks
-                    raw_name = file_item.get("title") or file_item.get("filename") or file_item.get("name")
-                    file_name = str(raw_name).strip() if raw_name else "Course Attachment"
-
-                    # Extract link
-                    file_url = file_item.get("fileurl") or file_item.get("url") or ""
-
-                    # Resource Name Label
-                    file_lbl = ctk.CTkLabel(
-                        file_row,
-                        text=f"📄 {file_name}",
-                        font=ctk.CTkFont(size=12),
-                        anchor="w"
-                    )
-                    file_lbl.pack(side="left", padx=5)
-
-                    # Action Button
-                    if file_url:
-                        open_btn = ctk.CTkButton(
-                            file_row,
-                            text="Open",
-                            width=60,
-                            height=22,
-                            font=ctk.CTkFont(size=11),
-                            fg_color="#3B82F6",
-                            hover_color="#2563EB",
-                            command=lambda url=file_url: webbrowser.open(url)
-                        )
-                        open_btn.pack(side="right", padx=5)
-            else:
-                no_files_lbl = ctk.CTkLabel(
-                    course_card,
-                    text="No files or modules loaded for this course.",
-                    font=ctk.CTkFont(size=11),
-                    text_color="#888888"
-                )
-                no_files_lbl.pack(anchor="w", padx=15, pady=(0, 12))
-
-        # --- Upcoming Deadlines Section ---
-        deadlines_header = ctk.CTkLabel(
-            self.scroll_container,
-            text=f"⏰ Upcoming Deadlines ({len(upcoming)})",
-            font=ctk.CTkFont(size=16, weight="bold")
+        back_btn = ctk.CTkButton(
+            nav_bar,
+            text="← Back to Courses",
+            width=120,
+            fg_color="#3B82F6",
+            hover_color="#2563EB",
+            command=self.render_course_grid
         )
-        deadlines_header.pack(anchor="w", pady=(20, 5))
+        back_btn.pack(side="left")
 
-        if not upcoming:
-            no_deadlines_lbl = ctk.CTkLabel(self.scroll_container, text="No upcoming tasks or deadlines.")
-            no_deadlines_lbl.pack(anchor="w", padx=10)
+        course_title = ctk.CTkLabel(
+            self.scroll_container,
+            text=course.get("fullname", "Course Details"),
+            font=ctk.CTkFont(size=20, weight="bold")
+        )
+        course_title.pack(anchor="center", pady=(0, 20))
 
-        for item in upcoming:
-            card = ctk.CTkFrame(self.scroll_container, fg_color="#332A2A")
-            card.pack(fill="x", pady=5, padx=5)
+        # Separate items into announcements vs standard resources
+        announcements = []
+        materials = []
 
-            task_lbl = ctk.CTkLabel(
-                card,
-                text=f"{item.get('name')} - {item.get('course')}",
-                font=ctk.CTkFont(size=13, weight="bold")
+        for item in course.get("files", []):
+            if item.get("type") in ["forum", "news"]:
+                announcements.append(item)
+            else:
+                materials.append(item)
+
+        # 1. Announcements Collapsible Card
+        ann_card = CollapsibleFrame(self.scroll_container, title="📢 Announcements")
+        ann_card.pack(fill="x", pady=10)
+
+        if announcements:
+            for ann in announcements:
+                self._build_item_row(ann_card.content_frame, ann)
+        else:
+            empty_lbl = ctk.CTkLabel(ann_card.content_frame, text="No announcements posted.", text_color="#888888")
+            empty_lbl.pack(anchor="w", padx=10, pady=5)
+
+        # 2. Course Materials Collapsible Card
+        mat_card = CollapsibleFrame(self.scroll_container, title="📁 Course Materials")
+        mat_card.pack(fill="x", pady=10)
+
+        if materials:
+            for mat in materials:
+                self._build_item_row(mat_card.content_frame, mat)
+        else:
+            empty_lbl = ctk.CTkLabel(mat_card.content_frame, text="No materials found.", text_color="#888888")
+            empty_lbl.pack(anchor="w", padx=10, pady=5)
+
+    def _build_item_row(self, parent_container, item: dict):
+        row = ctk.CTkFrame(parent_container, fg_color="transparent")
+        row.pack(fill="x", padx=5, pady=4)
+
+        raw_name = item.get("title") or "Item Resource"
+        url = item.get("fileurl") or ""
+
+        lbl = ctk.CTkLabel(row, text=f"• {raw_name}", font=ctk.CTkFont(size=12), anchor="w")
+        lbl.pack(side="left", padx=5)
+
+        if url:
+            btn = ctk.CTkButton(
+                row,
+                text="Open",
+                width=60,
+                height=22,
+                font=ctk.CTkFont(size=11),
+                fg_color="#3B82F6",
+                hover_color="#2563EB",
+                command=lambda u=url: webbrowser.open(u)
             )
-            task_lbl.pack(anchor="w", padx=15, pady=(8, 2))
-
-            time_lbl = ctk.CTkLabel(
-                card,
-                text=f"Due: {item.get('deadline')}",
-                text_color="#FFA500",
-                font=ctk.CTkFont(size=11)
-            )
-            time_lbl.pack(anchor="w", padx=15, pady=(0, 8))
+            btn.pack(side="right", padx=5)

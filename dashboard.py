@@ -64,9 +64,10 @@ class DashboardWindow(ctk.CTkFrame):
         self.container = ctk.CTkFrame(self.body, corner_radius=0, fg_color="transparent")
         self.container.pack(side="right", fill="both", expand=True)
 
+        # SINGLE INITIALIZATION ONLY: Pass self.refresh_live_data callback here
         self.views = {
             "Home": HomeView(self.container),
-            "Ebwise": EbwiseView(self.container),
+            "Ebwise": EbwiseView(self.container, fetch_callback=self.refresh_live_data),
             "Outlook": OutlookView(self.container),
             "Teams": TeamsView(self.container),
         }
@@ -75,32 +76,34 @@ class DashboardWindow(ctk.CTkFrame):
         self.show_view("Home")
         self.refresh_live_data()
 
-    def refresh_live_data(self):
-        """Starts background thread to pull eBwise data without freezing UI."""
-        threading.Thread(target=self._worker_fetch_data, daemon=True).start()
+    def refresh_live_data(self, classification: str = "inprogress", selected_filter: str = "In Progress"):
+        """Starts background thread to pull eBwise data with the specified filter."""
+        self.sync_status_label.configure(text="Syncing eBwise...", text_color="#FFA500")
+        threading.Thread(
+            target=self._worker_fetch_data,
+            args=(classification, selected_filter),
+            daemon=True
+        ).start()
 
-    def _worker_fetch_data(self):
-        data = fetch_ebwise_data()
-        self.after(0, lambda: self._update_ui_with_data(data))
+    def _worker_fetch_data(self, classification: str, selected_filter: str):
+        data = fetch_ebwise_data(classification=classification)
+        self.after(0, lambda: self._update_ui_with_data(data, selected_filter=selected_filter))
 
-    def _update_ui_with_data(self, data: dict):
+    def _update_ui_with_data(self, data: dict, selected_filter: str = "In Progress"):
         status = data.get("status")
 
         if status == "SUCCESS":
             self.sync_status_label.configure(text="● Live Data Synced", text_color="#4CAF50")
             ebwise_view = self.views.get("Ebwise")
             if ebwise_view and hasattr(ebwise_view, "update_data"):
-                ebwise_view.update_data(data)
+                ebwise_view.update_data(data, selected_filter=selected_filter)
         elif status == "EXPIRED":
             self.sync_status_label.configure(text="⚠️ Session Expired", text_color="#F44336")
             self.logout()
         elif status == "NO_TOKEN":
-            # Session itself is fine — we just couldn't get/use a Moodle web service
-            # token. Don't wipe credentials/session over this; just surface it.
             self.sync_status_label.configure(text="⚠️ API token unavailable", text_color="#F44336")
         else:
             self.sync_status_label.configure(text="⚠️ Sync Failed", text_color="#F44336")
-
     def _build_sidebar_menu(self):
         nav_items = ["Home", "Ebwise", "Outlook", "Teams"]
 
