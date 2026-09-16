@@ -3,6 +3,8 @@ import os
 import re
 import base64
 import requests
+import webbrowser
+import threading
 
 from storage import SESSION_FILE
 
@@ -234,6 +236,55 @@ def fetch_ebwise_data(classification: str = "inprogress") -> dict:
     except Exception as e:
         print(f"⚠️ Web service API error: {e}")
         return {"status": "FAILED", "error": str(e)}
+
+
+def _launch_playwright_browser(url: str):
+    """Spawns an authenticated browser instance using saved session cookies."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            # Launch visible Chromium browser
+            browser = p.chromium.launch(headless=False, args=["--start-maximized"])
+
+            # Load stored session cookies from storage_state.json
+            context = browser.new_context(
+                storage_state=SESSION_FILE,
+                no_viewport=True
+            )
+            page = context.new_page()
+            page.goto(url)
+
+            # Keep browser alive until closed by user or script
+            page.wait_for_event("close", timeout=0)
+    except Exception as e:
+        print(f"⚠️ Playwright launch error: {e}")
+        webbrowser.open(url)
+
+
+def open_ebwise_url_authenticated(url: str) -> bool:
+    """
+    Handles eBwise resource navigation:
+    - Files (pluginfile.php): Opened directly in system default browser via token.
+    - Pages (course/forum/assign): Opened in an authenticated Playwright session.
+    """
+    if not url:
+        return False
+
+    # 1. Direct downloadable files already contain wstoken
+    if "pluginfile.php" in url:
+        webbrowser.open(url)
+        return True
+
+    # 2. Standard Moodle Web Pages (Course, Forum, Quiz, Assignment)
+    if os.path.exists(SESSION_FILE):
+        # Run Playwright in a background thread to prevent freezing the CustomTkinter GUI
+        thread = threading.Thread(target=_launch_playwright_browser, args=(url,), daemon=True)
+        thread.start()
+        return True
+
+    # Fallback to default browser
+    webbrowser.open(url)
+    return False
 
 if __name__ == "__main__":
     result = fetch_ebwise_data()

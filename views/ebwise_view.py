@@ -1,6 +1,6 @@
 import webbrowser
 import customtkinter as ctk
-
+from ebwise_backend import open_ebwise_url_authenticated
 
 class CollapsibleFrame(ctk.CTkFrame):
     """Custom expandable card component with a toggle icon."""
@@ -209,24 +209,36 @@ class EbwiseView(ctk.CTkFrame):
             empty_lbl.pack(anchor="w", padx=10, pady=5)
 
     def _build_item_row(self, parent_container, item: dict):
-        row = ctk.CTkFrame(parent_container, fg_color="transparent")
-        row.pack(fill="x", padx=5, pady=4)
-
-        raw_name = item.get("title") or "Item Resource"
         url = item.get("fileurl") or ""
+        raw_name = item.get("title") or "Item Resource"
 
-        lbl = ctk.CTkLabel(row, text=f"• {raw_name}", font=ctk.CTkFont(size=12), anchor="w")
-        lbl.pack(side="left", padx=5)
+        # 1. Tile Container Box (styled as a full clickable row card)
+        tile = ctk.CTkFrame(
+            parent_container,
+            fg_color="#383838",       # Slightly lighter dark background for distinct tile look
+            corner_radius=8,
+            cursor="hand2" if url else "arrow"
+        )
+        tile.pack(fill="x", padx=8, pady=5, ipady=6)
 
+        # 2. File Label (increased font size to 14 and bolded)
+        lbl = ctk.CTkLabel(
+            tile,
+            text=f"📄  {raw_name}",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            anchor="w",
+            cursor="hand2" if url else "arrow"
+        )
+        lbl.pack(side="left", padx=15, pady=6, fill="x", expand=True)
+
+        # 3. Bind click events to both the frame and label
         if url:
-            btn = ctk.CTkButton(
-                row,
-                text="Open",
-                width=60,
-                height=22,
-                font=ctk.CTkFont(size=11),
-                fg_color="#3B82F6",
-                hover_color="#2563EB",
-                command=lambda u=url: webbrowser.open(u)
-            )
-            btn.pack(side="right", padx=5)
+            open_action = lambda e, u=url: open_ebwise_url_authenticated(u)
+            tile.bind("<Button-1>", open_action)
+            lbl.bind("<Button-1>", open_action)
+
+            # Optional hover effect to highlight the box on mouse hover
+            tile.bind("<Enter>", lambda e: tile.configure(fg_color="#4A4A4A"))
+            tile.bind("<Leave>", lambda e: tile.configure(fg_color="#383838"))
+            lbl.bind("<Enter>", lambda e: tile.configure(fg_color="#4A4A4A"))
+            lbl.bind("<Leave>", lambda e: tile.configure(fg_color="#383838"))
