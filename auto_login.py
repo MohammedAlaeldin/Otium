@@ -223,28 +223,38 @@ async def run_daily_login_async(creds: dict) -> bool:
 
     print("🚀 Starting daily auto-login process (Parallel Sync)...")
     async with async_playwright() as p:
-        # Launch Chromium with stealth flags to avoid passkey / suspicious flags
         browser = await p.chromium.launch(
             headless=False,
             args=["--disable-blink-features=AutomationControlled"]
         )
 
-        context_kwargs = {
+        base_context_kwargs = {
             "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
+
+        # 1. Test Existing Session (If it exists)
+        session_authenticated = False
         if os.path.exists(SESSION_FILE):
             print(f"📁 Found existing {SESSION_FILE}, testing session validity...")
-            context_kwargs["storage_state"] = SESSION_FILE
+            test_context = await browser.new_context(storage_state=SESSION_FILE, **base_context_kwargs)
+            test_page = await test_context.new_page()
 
-        context = await browser.new_context(**context_kwargs)
-        page = await context.new_page()
+            session_authenticated = await is_session_valid(test_page)
 
-        session_authenticated = False
-        if "storage_state" in context_kwargs:
-            session_authenticated = await is_session_valid(page)
+            if session_authenticated:
+                context = test_context # Keep using this context
+            else:
+                print("🗑️ Session expired. Nuking old session data to start completely fresh...")
+                await test_context.close()
+                os.remove(SESSION_FILE) # Delete the bad cookie file
 
+        # 2. Perform Fresh Login if needed
         if not session_authenticated:
-            print("🔑 Session expired or missing. Executing login sequence...")
+            print("✨ Spawning pristine browser context for a clean login...")
+            # Notice we do NOT pass storage_state here, ensuring a 100% clean browser
+            context = await browser.new_context(**base_context_kwargs)
+            page = await context.new_page()
+
             try:
                 session_authenticated = await authenticate_with_credentials(page, email, password, totp_secret)
             except Exception as e:
@@ -252,6 +262,7 @@ async def run_daily_login_async(creds: dict) -> bool:
                 await browser.close()
                 return False
 
+        # 3. Sync and Save
         if session_authenticated:
             print("🌐 Synchronizing auth state with Microsoft Teams and Outlook concurrently...")
             await asyncio.gather(
@@ -266,7 +277,6 @@ async def run_daily_login_async(creds: dict) -> bool:
 
         await browser.close()
         return False
-
 #try 2
 def run_daily_login(creds: dict) -> bool:
     return asyncio.run(run_daily_login_async(creds))

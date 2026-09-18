@@ -110,16 +110,25 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
 
     print("🚀 Launching Playwright authentication pipeline...")
 
+    # Nuke the old session file to guarantee a fresh login flow
+    if os.path.exists(SESSION_FILE):
+        print("🗑️ Deleting old session file to force a pristine login environment...")
+        os.remove(SESSION_FILE)
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=False,
             slow_mo=200,
             args=["--disable-blink-features=AutomationControlled"]
         )
+
+        # Fresh context with NO storage_state
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         page = context.new_page()
+
+        # ... (rest of the login logic remains exactly the same as previously provided) ...
 
         try:
             # 1. NAVIGATION
