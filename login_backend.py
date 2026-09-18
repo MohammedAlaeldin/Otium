@@ -278,3 +278,4 @@ def open_authenticated_service(target_url: str):
         page.goto(target_url)
         page.wait_for_timeout(300000)
     return True
+#try 2

@@ -267,6 +267,7 @@ async def run_daily_login_async(creds: dict) -> bool:
         await browser.close()
         return False
 
-
+#try 2
 def run_daily_login(creds: dict) -> bool:
     return asyncio.run(run_daily_login_async(creds))
+
