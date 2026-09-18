@@ -19,7 +19,6 @@ class DashboardWindow(ctk.CTkFrame):
 
         self.sidebar_visible = False
         self.sidebar_width = 180
-        self.current_width = 0
 
         # --- Top Header Bar ---
         self.header = ctk.CTkFrame(self, height=50, corner_radius=0)
@@ -57,14 +56,14 @@ class DashboardWindow(ctk.CTkFrame):
         self.body = ctk.CTkFrame(self, corner_radius=0)
         self.body.pack(fill="both", expand=True, side="bottom")
 
-        self.sidebar = ctk.CTkFrame(self.body, width=0, corner_radius=0, fg_color="#1E1E1E")
-        self.sidebar.pack(side="left", fill="y")
+        # Sidebar setup (Keep fixed width to avoid interior text clipping/flicker)
+        self.sidebar = ctk.CTkFrame(self.body, width=self.sidebar_width, corner_radius=0, fg_color="#1E1E1E")
         self.sidebar.pack_propagate(False)
 
         self.container = ctk.CTkFrame(self.body, corner_radius=0, fg_color="transparent")
         self.container.pack(side="right", fill="both", expand=True)
 
-        # SINGLE INITIALIZATION ONLY: Pass self.refresh_live_data callback here
+        # Initialize Views
         self.views = {
             "Home": HomeView(self.container),
             "Ebwise": EbwiseView(self.container, fetch_callback=self.refresh_live_data),
@@ -76,9 +75,15 @@ class DashboardWindow(ctk.CTkFrame):
         self.show_view("Home")
         self.refresh_live_data()
 
+    def toggle_sidebar(self):
+        """Instant toggle without loop-based layout thrashing/glitches."""
+        if self.sidebar_visible:
+            self.sidebar.pack_forget()
+        else:
+            self.sidebar.pack(side="left", fill="y", before=self.container)
+        self.sidebar_visible = not self.sidebar_visible
 
     def refresh_live_data(self, classification: str = "inprogress", selected_filter: str = "In Progress"):
-        """Starts background thread to pull eBwise data with the specified filter."""
         self.sync_status_label.configure(text="Syncing eBwise...", text_color="#FFA500")
         threading.Thread(
             target=self._worker_fetch_data,
@@ -105,6 +110,7 @@ class DashboardWindow(ctk.CTkFrame):
             self.sync_status_label.configure(text="⚠️ API token unavailable", text_color="#F44336")
         else:
             self.sync_status_label.configure(text="⚠️ Sync Failed", text_color="#F44336")
+
     def _build_sidebar_menu(self):
         nav_items = ["Home", "Ebwise", "Outlook", "Teams"]
 
@@ -133,26 +139,6 @@ class DashboardWindow(ctk.CTkFrame):
             command=self.logout
         )
         logout_btn.pack(fill="x", padx=10, pady=15)
-
-    def toggle_sidebar(self):
-        if self.sidebar_visible:
-            self._animate_sidebar(closing=True)
-        else:
-            self._animate_sidebar(closing=False)
-        self.sidebar_visible = not self.sidebar_visible
-
-    def _animate_sidebar(self, closing: bool):
-        step = 15
-        if closing:
-            if self.current_width > 0:
-                self.current_width -= step
-                self.sidebar.configure(width=max(0, self.current_width))
-                self.after(10, lambda: self._animate_sidebar(closing=True))
-        else:
-            if self.current_width < self.sidebar_width:
-                self.current_width += step
-                self.sidebar.configure(width=min(self.sidebar_width, self.current_width))
-                self.after(10, lambda: self._animate_sidebar(closing=False))
 
     def show_view(self, view_name: str):
         self.title_label.configure(text=view_name)
