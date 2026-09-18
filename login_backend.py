@@ -6,6 +6,7 @@ from playwright.sync_api import sync_playwright
 
 from storage import SESSION_FILE
 
+
 def is_valid_base32(key: str) -> bool:
     clean_key = key.replace(" ", "").strip()
     if len(clean_key) not in (16, 32):
@@ -19,56 +20,71 @@ def is_valid_base32(key: str) -> bool:
 
 
 def validate_credentials_format(email: str, password: str, secret_key: str):
-    """Validates user input before launching Playwright."""
     clean_secret = secret_key.replace(" ", "").strip()
-
-    if not email.endswith(".mmu.edu.my") or email.endswith(".MMU.EDU.MY"):
+    if not email.lower().endswith(".mmu.edu.my"):
         return False, "Email must end with '.mmu.edu.my'"
     if not is_valid_base32(clean_secret):
         return False, "Secret key must be 16 characters (Base32: A-Z, 2-7)"
     if not password:
         return False, "Password cannot be empty"
-
     return True, "Format valid"
 
 
-def _try_check_persist_checkbox(page):
-    """Checks a 'Don't ask again for N days' / 'Don't show this again' checkbox if one
-    is present on the current Microsoft login step, so future logins reuse the trusted
-    device instead of forcing a full 2FA challenge again."""
-    known_selectors = [
-        '#idChkBx_SAOTCC_TD',  # "Don't ask again for N days" on the MFA/OTP step
-        '#KmsiCheckboxField',  # "Don't show this again" on the "Stay signed in?" step
+def handle_security_interrupts(page):
+    """Bypasses Microsoft passkey prompts or 'Skip for now' screens."""
+    interrupt_selectors = [
+        'text=/skip for now/i',
+        'text=/ask later/i',
+        'text=/no thanks/i',
+        '#iCancel',
+        'input[value="Skip for now"]'
     ]
+    for sel in interrupt_selectors:
+        try:
+            btn = page.locator(sel).first
+            if btn.is_visible(timeout=1000):
+                print(f"🛡️ Skipping security interrupt: {sel}")
+                btn.click()
+                time.sleep(1)
+        except Exception:
+            pass
+
+
+def _try_check_persist_checkbox(page):
+    """Targets the 'Don't ask again for 1 day' / persistence checkbox safely."""
+    known_selectors = [
+        '#idChkBx_SAOTCC_TD',  # Standard 2FA "Don't ask again for 1 day" checkbox
+        '#KmsiCheckboxField',  # "Stay signed in?" checkbox
+    ]
+
     for sel in known_selectors:
         try:
             checkbox = page.locator(sel)
             if checkbox.is_visible(timeout=1000):
                 if not checkbox.is_checked():
-                    checkbox.check()
+                    checkbox.check(force=True)
                     print(f"☑️ Checked persistence checkbox: {sel}")
+                    time.sleep(0.5)
                 return True
         except Exception:
             continue
 
     try:
-        label = page.locator("text=/don't ask again|don't show this again/i").first
+        label = page.locator("text=/don't ask again|1 day|don't show this again/i").first
         if label.is_visible(timeout=1000):
-            checkbox = label.locator("xpath=preceding::input[@type='checkbox'][1]")
-            if checkbox.count() > 0 and not checkbox.is_checked():
-                checkbox.check()
-                print("☑️ Checked persistence checkbox via text fallback")
-                return True
+            label.click(force=True)
+            print("☑️ Checked persistence checkbox via '1 day' label click")
+            time.sleep(0.5)
+            return True
     except Exception:
         pass
 
     return False
 
+
 def sync_additional_services(context):
-    """Primes Teams and Outlook sessions using the active SSO context."""
     print("🌐 Synchronizing auth state for Teams and Outlook...")
 
-    # 1. Sync Teams Session
     try:
         teams_page = context.new_page()
         teams_page.goto("https://teams.microsoft.com", wait_until="domcontentloaded", timeout=20000)
@@ -78,7 +94,6 @@ def sync_additional_services(context):
     except Exception as e:
         print(f"⚠️ Teams sync skipped/timed out: {e}")
 
-    # 2. Sync Outlook Session
     try:
         outlook_page = context.new_page()
         outlook_page.goto("https://outlook.office.com/mail/", wait_until="domcontentloaded", timeout=20000)
@@ -90,30 +105,24 @@ def sync_additional_services(context):
 
 
 def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: str):
-    """
-    Executes authentication flow at a stable speed and exports
-    Microsoft SSO session state for eBwise, Teams, and Outlook to session.json.
-    """
     clean_secret = totp_secret.replace(" ", "").strip()
     totp = pyotp.TOTP(clean_secret)
 
     print("🚀 Launching Playwright authentication pipeline...")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False, slow_mo=300)
-        context = browser.new_context()
+        browser = p.chromium.launch(
+            headless=False,
+            slow_mo=200,
+            args=["--disable-blink-features=AutomationControlled"]
+        )
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
         page = context.new_page()
 
-        def handle_response(response):
-            if "service.php" in response.url and response.status == 200:
-                try:
-                    data = response.json()
-                    print("Intercepted Login Response JSON:", data)
-                except Exception:
-                    pass
-
         try:
-            # 1. NAVIGATION & EMAIL
+            # 1. NAVIGATION
             page.goto("https://ebwise.mmu.edu.my/login/index.php", wait_until="networkidle")
 
             login_btn = (
@@ -122,13 +131,26 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
                 .or_(page.locator('a:has-text("Log in")'))
             )
             login_btn.first.click(timeout=8000)
+            time.sleep(1.5)
 
-            email_input = page.locator('input[type="email"]')
-            email_input.wait_for(state="visible", timeout=12000)
-            email_input.fill(user_email)
-            page.locator('input[type="submit"]').click()
+            # Check for remembered account tile
+            try:
+                account_tile = page.locator(f'div[data-test-id="{user_email}"], text="{user_email}"').first
+                if account_tile.is_visible(timeout=2000):
+                    account_tile.click()
+                    time.sleep(1.5)
+            except Exception:
+                pass
 
-            time.sleep(2)
+            # State check: Is email input visible and NOT password input?
+            email_input = page.locator('input[type="email"]:visible, input[name="loginfmt"]:visible').first
+            password_input = page.locator('input[type="password"]:visible, input[name="passwd"]:visible').first
+
+            if email_input.is_visible(timeout=2000) and not password_input.is_visible(timeout=500):
+                email_input.fill(user_email)
+                page.locator('input[type="submit"]').click()
+                time.sleep(2)
+
             email_error = (
                 page.locator("#usernameError")
                 .or_(page.locator("text='Enter a valid email address'"))
@@ -138,45 +160,47 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
                 browser.close()
                 return False, "EMAIL_ERROR: Microsoft rejected this email address."
 
+            handle_security_interrupts(page)
+
             # 2. PASSWORD
-            password_input = page.locator('input[type="password"]')
+            password_input = page.locator('input[type="password"]:visible, input[name="passwd"]:visible').first
             try:
                 password_input.wait_for(state="visible", timeout=10000)
             except Exception:
                 browser.close()
-                return False, "EMAIL_ERROR: Account not found or email step failed."
+                return False, "EMAIL_ERROR: Password field not visible."
 
             password_input.fill(user_password)
             page.locator('input[type="submit"]').click()
-
             time.sleep(2)
+
             pwd_error = page.locator("#passwordError").or_(page.locator("text='Your account or password is incorrect'"))
             if pwd_error.is_visible():
                 browser.close()
                 return False, "PASSWORD_ERROR: Incorrect password."
 
-            # 3. 2FA HANDSHAKE
-            print("⏳ Handling 2FA verification options...")
-            time.sleep(1.5)
+            handle_security_interrupts(page)
 
+            # 3. 2FA HANDSHAKE
+            time.sleep(1)
             for selector in [
                 'text="I can\'t use my Microsoft Authenticator app right now"',
                 'text="Use a verification code"',
                 'text=/verification code/i'
             ]:
-                loc = page.locator(selector)
+                loc = page.locator(selector).first
                 if loc.is_visible():
                     loc.click()
                     time.sleep(1)
 
-            otc_input = page.locator('input[name="otc"]')
+            otc_input = page.locator('input[name="otc"]:visible').first
             try:
                 otc_input.wait_for(state="visible", timeout=10000)
             except Exception:
                 browser.close()
-                return False, "TOTP_ERROR: Unable to reach 2FA code entry field. Key may not be activated."
+                return False, "TOTP_ERROR: Unable to reach 2FA code entry field."
 
-            # 4. GENERATE & SUBMIT TOTP
+            # 4. SUBMIT TOTP & CHECK 1-DAY PERSISTENCE
             time_left = 30 - (int(time.time()) % 30)
             if time_left < 3:
                 time.sleep(time_left + 0.5)
@@ -186,9 +210,10 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
 
             otc_input.fill(current_code)
             _try_check_persist_checkbox(page)
-            page.locator('input[type="submit"]').click()
 
+            page.locator('input[type="submit"]').click()
             time.sleep(2)
+
             totp_error = (
                 page.locator('text="That code didn\'t work"')
                 .or_(page.locator('text="More information required"'))
@@ -198,12 +223,14 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
                 browser.close()
                 return False, "TOTP_ERROR: Microsoft rejected the code."
 
-            # 5. SAVE SSO SESSION ("Stay signed in?")
-            stay_signed_in_btn = page.locator('input[id="idSIButton9"]').or_(page.locator('input[value="Yes"]'))
+            handle_security_interrupts(page)
+
+            # 5. "STAY SIGNED IN?"
+            stay_signed_in_btn = page.locator('input[id="idSIButton9"]').or_(page.locator('input[value="Yes"]')).first
             try:
-                stay_signed_in_btn.wait_for(state="visible", timeout=5000)
-                _try_check_persist_checkbox(page)
-                stay_signed_in_btn.click()
+                if stay_signed_in_btn.is_visible(timeout=4000):
+                    _try_check_persist_checkbox(page)
+                    stay_signed_in_btn.click()
             except Exception:
                 pass
 
@@ -211,10 +238,7 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
             print("⏳ Waiting for eBwise home dashboard...")
             page.wait_for_url(lambda url: "ebwise.mmu.edu.my" in url and "login" not in url, timeout=15000)
 
-            # 7. ADDED STEP: PRIME TEAMS AND OUTLOOK (Only reached if credentials pass)
             sync_additional_services(context)
-
-            # Export unified session cookies to disk
             context.storage_state(path=SESSION_FILE)
             print(f"✅ Unified Microsoft SSO session state stored to {SESSION_FILE}")
 
@@ -227,7 +251,6 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
 
 
 def generate_current_totp(secret_key: str):
-    """Generates active 6-digit TOTP code and seconds remaining."""
     try:
         clean_secret = secret_key.replace(" ", "").strip()
         totp = pyotp.TOTP(clean_secret)
@@ -239,13 +262,16 @@ def generate_current_totp(secret_key: str):
 
 
 def open_authenticated_service(target_url: str):
-    """Launches browser pre-authenticated with saved session state."""
     if not os.path.exists(SESSION_FILE):
         print(f"⚠️ No session file found at {SESSION_FILE}. Run full login first.")
         return False
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False, slow_mo=200)
+        browser = p.chromium.launch(
+            headless=False,
+            slow_mo=200,
+            args=["--disable-blink-features=AutomationControlled"]
+        )
         context = browser.new_context(storage_state=SESSION_FILE)
         page = context.new_page()
 
