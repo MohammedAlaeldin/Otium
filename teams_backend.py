@@ -1,383 +1,326 @@
+import asyncio
+import os
+import time
+import requests
+import tempfile
 import json
 import re
-import os
-from urllib.parse import unquote
-from datetime import datetime
-from playwright.sync_api import sync_playwright
-import storage
+import html
+from playwright.async_api import async_playwright
 
-def clean_html(html_str) -> str:
-    if not html_str: return ""
-    s = str(html_str)
-    s = re.sub(r'(?i)<br\s*/?>', ' ', s)
-    s = re.sub(r'(?i)</p>', ' ', s)
-    s = re.sub(r'(?i)</div>', ' ', s)
-    s = re.sub(r'<[^<]+?>', '', s)
-    return re.sub(r'\s+', ' ', s).strip()
+from storage import SESSION_FILE
 
-def _is_garbage(text) -> bool:
-    if not text: return True
-    s = str(text).strip()
-    if len(s) < 2: return True
-    if re.search(r'\b\d+:[a-zA-Z]+:', s): return True
-    if s.startswith('{') or s.startswith('['): return True
-    if len(s) > 60 and s.count(' ') < 2: return True
-    return False
 
-def _is_human_message(msg_dict: dict) -> bool:
-    """Strictly blocks Teams system events, call logs, and recording notifications."""
-    msg_type = msg_dict.get("messageType", "") or msg_dict.get("type", "")
-    
-    # 1. Reject explicit non-message types (Events, ThreadActivities, etc.)
-    if msg_type and msg_type not in ["Message", "Text", "RichText/Html"]:
+class TeamsBackend:
+    def __init__(self):
+        self.skype_token = None
+        self.graph_token = None
+        self.cache_file = os.path.join(tempfile.gettempdir(), "otium_teams_cache.json")
+        self.last_errors = []
+
+    def _clean_text(self, raw_text: str) -> str:
+        if not raw_text:
+            return ""
+        clean = re.sub(r'<[^<]+?>', '', raw_text)
+        clean = html.unescape(clean)
+        return clean.replace('\xa0', ' ').strip()
+
+    def _load_cached_tokens(self):
+        try:
+            if os.path.exists(self.cache_file):
+                with open(self.cache_file, "r") as f:
+                    data = json.load(f)
+                    if data.get("expires_at", 0) > time.time() + 300:
+                        self.skype_token = data.get("skype_token")
+                        self.graph_token = data.get("graph_token")
+                        return bool(self.skype_token and self.graph_token)
+        except Exception:
+            pass
         return False
-        
-    # 2. Reject known system text patterns (like the ones in your screenshot)
-    content = str(msg_dict.get("content", ""))
-    if not content and isinstance(msg_dict.get("body"), dict):
-        content = str(msg_dict.get("body", {}).get("content", ""))
-        
-    system_phrases = [
-        "Recording stopped",
-        "Recording has been saved",
-        "Meeting ended",
-        "false false callStarted",
-        "systemEventMessage"
-    ]
-    
-    for phrase in system_phrases:
-        if phrase in content:
-            return False
-            
-    return True
 
-def fetch_teams_data_clean() -> dict:
-    try:
-        if not os.path.exists(storage.SESSION_FILE):
-            return {"announcements": [], "chats": [], "meetings": [], "assignments": [], "calendar": []}
+    def _save_cached_tokens(self):
+        try:
+            with open(self.cache_file, "w") as f:
+                json.dump({
+                    "skype_token": self.skype_token,
+                    "graph_token": self.graph_token,
+                    "expires_at": time.time() + 3600
+                }, f)
+        except Exception:
+            pass
 
-        extracted_meetings = []
-        extracted_announcements = []
-        conversations = {}
-        extracted_calendar = []
+    def _clear_cache(self):
+        self.skype_token = None
+        self.graph_token = None
+        if os.path.exists(self.cache_file):
+            try:
+                os.remove(self.cache_file)
+            except Exception:
+                pass
 
-        conv_meta = {}
-        conv_history = {}
+    async def _get_tokens_silently(self):
+        if not os.path.exists(SESSION_FILE):
+            raise FileNotFoundError(f"Session missing at {SESSION_FILE}! Please log in first.")
 
-        # ==================================================================
-        # 1. ORIGINAL PARSE PAYLOAD (Meetings Restored)
-        # ==================================================================
-        # RESTORED: parent_title="Live Class/Call" exactly as you originally had it
-        def parse_payload(obj, parent_ts=None, parent_title="Live Class/Call", parent_type="Unknown"):
-            if isinstance(obj, dict):
-                
-                meeting_start_ts = None
-                if isinstance(obj.get("start"), dict):
-                    meeting_start_ts = obj.get("start", {}).get("dateTime")
-                elif obj.get("startTime"):
-                    meeting_start_ts = obj.get("startTime")
-                elif isinstance(obj.get("eventDetail"), dict):
-                    meeting_start_ts = obj["eventDetail"].get("startTime") or obj["eventDetail"].get("createdTime")
-
-                current_ts = meeting_start_ts or obj.get("originalArrivalTime") or obj.get("composeTime") or obj.get("createdDateTime") or obj.get("lastModifiedDateTime") or parent_ts
-                current_title = obj.get("subject") or obj.get("topic") or obj.get("threadProperties", {}).get("topic") or parent_title
-
-                current_type = parent_type
-                thread_id = str(obj.get("threadId", "")) + str(obj.get("conversationId", "")) + str(obj.get("id", ""))
-                if "teamId" in obj or "channelIdentity" in obj or "@thread.tacv2" in thread_id:
-                    current_type = "Channel"
-                elif "@thread.v2" in thread_id or "chatId" in obj:
-                    current_type = "Chat"
-
-                # RESTORED: Your exact original meeting hunting logic
-                join_url = None
-                if isinstance(obj.get("onlineMeeting"), dict):
-                    join_url = obj["onlineMeeting"].get("joinUrl")
-                if not join_url:
-                    join_url = obj.get("onlineMeetingUrl") or obj.get("joinUrl")
-                    
-                if not join_url:
-                    for key, val in obj.items():
-                        if isinstance(val, str) and "meetup-join" in val:
-                            matches = re.findall(r'https://teams\.microsoft\.com/l/meetup-join/[^\s"\'>]+', val)
-                            if matches:
-                                join_url = matches[0]
-                                break
-                                
-                if join_url and "meetup-join" in join_url:
-                    extracted_meetings.append({
-                        "title": current_title[:50] if current_title else "Live Class/Call",
-                        "join_url": join_url,
-                        "start_time": current_ts
-                    })
-
-                # Announcements / Chats (Fallback)
-                if _is_human_message(obj):
-                    content = obj.get("content") or (obj.get("body", {}).get("content") if isinstance(obj.get("body"), dict) else None)
-                    if not content and isinstance(obj.get("lastMessagePreview"), dict):
-                        preview = obj["lastMessagePreview"]
-                        content = preview.get("content") or (preview.get("body", {}).get("content") if isinstance(preview.get("body"), dict) else None)
-                    
-                    sender = obj.get("imDisplayName") or (obj.get("from", {}).get("user", {}).get("displayName") if isinstance(obj.get("from"), dict) else None)
-                    if not sender and isinstance(obj.get("lastMessagePreview"), dict):
-                        sender = obj["lastMessagePreview"].get("imDisplayName") or obj["lastMessagePreview"].get("sender")
-
-                    if content and isinstance(content, str) and sender and sender != "System":
-                        clean_text = clean_html(content)
-                        if len(clean_text) > 2 and not _is_garbage(clean_text):
-                            msg_data = {
-                                "sender": str(sender),
-                                "message": clean_text[:300],
-                                "timestamp": str(current_ts)
-                            }
-                            if current_type == "Channel":
-                                msg_data["channel_name"] = str(current_title) if current_title != "Live Class/Call" else "Activity Feed"
-                                if msg_data not in extracted_announcements:
-                                    extracted_announcements.append(msg_data)
-                            elif current_type == "Chat":
-                                conv_name = str(current_title) if current_title != "Live Class/Call" else str(sender)
-                                if conv_name not in conversations: conversations[conv_name] = []
-                                if msg_data not in conversations[conv_name]: conversations[conv_name].append(msg_data)
-
-                if "start" in obj and isinstance(obj.get("start"), dict) and "dateTime" in obj["start"]:
-                    end_time = obj.get("end", {}).get("dateTime") if isinstance(obj.get("end"), dict) else None
-                    organizer = obj.get("organizer", {}).get("emailAddress", {}).get("name") if isinstance(obj.get("organizer"), dict) else ""
-                    extracted_calendar.append({
-                        "subject": obj.get("subject") or "Scheduled Event",
-                        "start_time": obj["start"]["dateTime"],
-                        "end_time": end_time,
-                        "organizer": organizer,
-                        "is_online": True if join_url else False
-                    })
-
-                for val in obj.values():
-                    if isinstance(val, (dict, list)):
-                        parse_payload(val, current_ts, current_title, current_type)
-
-            elif isinstance(obj, list):
-                for item in obj:
-                    if isinstance(item, (dict, list)):
-                        parse_payload(item, parent_ts, parent_title, parent_type)
-
-        # ==================================================================
-        # 2. CHAT CONVERSATIONS WALKER
-        # ==================================================================
-        def parse_conversations_list(data):
-            if not isinstance(data, dict): return
-            items = data.get("conversations")
-            if not isinstance(items, list): return
-            
-            for c in items:
-                if not isinstance(c, dict): continue
-                cid = c.get("id")
-                if not cid: continue
-                
-                meta = conv_meta.setdefault(cid, {"name": "", "preview_sender": "", "preview_body": "", "preview_ts": ""})
-                props = c.get("threadProperties") or {}
-                
-                # Name Resolution
-                if not meta["name"]:
-                    topic = props.get("topic") or props.get("subject")
-                    if topic and str(topic).strip().lower() not in ("", "chat", "live class/call"):
-                        meta["name"] = str(topic).strip()
-                    else:
-                        members = props.get("members") or c.get("members") or []
-                        names = []
-                        for m in members:
-                            if isinstance(m, dict):
-                                n = m.get("friendlyName") or m.get("displayName") or m.get("name") or (m.get("user") or {}).get("displayName")
-                                if n and n not in names and not _is_garbage(str(n)):
-                                    names.append(str(n))
-                        if names:
-                            meta["name"] = ", ".join(names[:3])
-
-                # Safe Preview Resolution
-                preview = c.get("lastMessagePreview") or {}
-                if _is_human_message(preview):
-                    body = preview.get("content") or ""
-                    if not body and isinstance(preview.get("body"), dict):
-                        body = preview["body"].get("content", "")
-                    
-                    body_clean = clean_html(body)
-                    if body_clean and not _is_garbage(body_clean) and not meta["preview_body"]:
-                        meta["preview_body"] = body_clean
-
-                    if not meta["preview_sender"]:
-                        s = preview.get("imDisplayName") or preview.get("sender")
-                        if s and not _is_garbage(str(s)): meta["preview_sender"] = str(s)
-
-                    ts = preview.get("composeTime") or preview.get("originalArrivalTime")
-                    if ts and not meta["preview_ts"]: meta["preview_ts"] = str(ts)
-
-        # ==================================================================
-        # 3. CHAT HISTORY (MESSAGES) WALKER
-        # ==================================================================
-        def parse_messages_endpoint(url, data):
-            m = re.search(r'/conversations/([^/]+)/messages', url)
-            if not m or not isinstance(data, dict): return
-            cid = unquote(m.group(1))
-            msgs = data.get("messages")
-            if not isinstance(msgs, list): return
-
-            bucket = conv_history.setdefault(cid, [])
-            seen = {x.get("timestamp") for x in bucket}
-
-            for msg in msgs:
-                if not isinstance(msg, dict): continue
-                
-                # Applying the strict filter to kill system spam
-                if not _is_human_message(msg):
-                    continue
-
-                content = msg.get("content") or ""
-                if not content and isinstance(msg.get("body"), dict):
-                    content = msg["body"].get("content", "")
-                
-                clean = clean_html(content)
-                if not clean or _is_garbage(clean): continue
-
-                sender = msg.get("imDisplayName")
-                if not sender and isinstance(msg.get("from"), dict):
-                    sender = (msg["from"].get("user") or {}).get("displayName")
-                sender = sender or "Unknown"
-
-                ts = msg.get("composeTime") or msg.get("originalArrivalTime") or ""
-                if ts in seen: continue
-
-                bucket.append({
-                    "sender": str(sender),
-                    "message": clean[:500],
-                    "timestamp": str(ts),
-                })
-                seen.add(ts)
-
-            bucket.sort(key=lambda x: str(x.get("timestamp") or ""))
-
-        # ==================================================================
-        # PLAYWRIGHT EXECUTION
-        # ==================================================================
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                storage_state=storage.SESSION_FILE,
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
+                      "--disable-blink-features=AutomationControlled"]
             )
-            page = context.new_page()
+            context = await browser.new_context(
+                storage_state=SESSION_FILE,
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            page = await context.new_page()
 
-            def handle_response(response):
+            skype_future = asyncio.Future()
+            graph_future = asyncio.Future()
+
+            async def handle_request(request):
                 try:
-                    if response.status == 200 and "application/json" in response.headers.get("content-type", ""):
-                        data = response.json()
-                        url = response.url or ""
-                        parse_payload(data)
-                        parse_conversations_list(data)
-                        parse_messages_endpoint(url, data)
+                    auth = request.headers.get("authorization", "") or request.headers.get("x-ms-skypetoken", "")
+                    if auth:
+                        token = auth.replace("skypetoken=", "")
+                        if not token.startswith("Bearer"):
+                            token = f"Bearer {token}"
+
+                        if "api.spaces.skype.com" in request.url or "teams.microsoft.com/api" in request.url or "chatsvcagg" in request.url:
+                            if not skype_future.done(): skype_future.set_result(token)
+                        elif "graph.microsoft.com" in request.url or "outlook.office.com" in request.url:
+                            if not graph_future.done(): graph_future.set_result(token)
                 except Exception:
                     pass
 
-            page.on("response", handle_response)
-
-            print("🌐 Ghost User loading Teams...")
-            page.goto("https://teams.microsoft.com/v2/", wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(4000)
-
-            # --- Explicit UI Clicks before Hash Fallbacks to force Activity ---
-            try:
-                print("📢 Clicking Activity Tab...")
-                page.locator('button[data-tid="app-bar-activity"]').first.click(timeout=3000)
-                page.wait_for_timeout(3000)
-            except Exception:
-                print("📢 Fallback to Activity Hash Route...")
-                page.goto("https://teams.microsoft.com/v2/#/activity", wait_until="domcontentloaded", timeout=15000)
-                page.wait_for_timeout(3000)
+            page.on("request", handle_request)
 
             try:
-                print("💬 Clicking Chats Tab...")
-                page.locator('button[data-tid="app-bar-chat"]').first.click(timeout=3000)
-                page.wait_for_timeout(3000)
-            except Exception:
-                page.goto("https://teams.microsoft.com/v2/#/chats", wait_until="domcontentloaded", timeout=15000)
-                page.wait_for_timeout(3000)
+                await page.goto("https://teams.microsoft.com/v2/", wait_until="domcontentloaded", timeout=60000)
+                await page.wait_for_timeout(10000)
 
+                js_script = """
+                () => {
+                    let tokens = { skype: null, graph: null };
+                    function checkToken(val) {
+                        try {
+                            if (typeof val !== 'string') return;
+                            let secret = val;
+                            if (val.startsWith('{')) {
+                                let parsed = JSON.parse(val);
+                                secret = parsed.secret || parsed.accessToken || val;
+                            }
+                            if (typeof secret === 'string' && secret.startsWith('eyJ')) {
+                                let parts = secret.split('.');
+                                if (parts.length === 3) {
+                                    let base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+                                    let pad = base64.length % 4;
+                                    if (pad) { base64 += new Array(5 - pad).join('='); }
+                                    let payload = JSON.parse(atob(base64));
+
+                                    if (payload.aud) {
+                                        if (payload.aud.includes("skype.com") || payload.aud.includes("teams.microsoft.com")) { tokens.skype = secret; }
+                                        if (payload.aud.includes("graph.microsoft.com")) { tokens.graph = secret; }
+                                    }
+                                }
+                            }
+                        } catch(e) {}
+                    }
+                    for (let i = 0; i < localStorage.length; i++) { checkToken(localStorage.getItem(localStorage.key(i))); }
+                    for (let i = 0; i < sessionStorage.length; i++) { checkToken(sessionStorage.getItem(sessionStorage.key(i))); }
+                    return tokens;
+                }
+                """
+                extracted = await page.evaluate(js_script)
+
+                if extracted.get('skype'): self.skype_token = f"Bearer {extracted['skype']}"
+                if extracted.get('graph'): self.graph_token = f"Bearer {extracted['graph']}"
+
+                try:
+                    if not self.skype_token: self.skype_token = await asyncio.wait_for(skype_future, timeout=20.0)
+                    if not self.graph_token: self.graph_token = await asyncio.wait_for(graph_future, timeout=20.0)
+                except asyncio.TimeoutError:
+                    print("⚠️ [DEBUG] Network Interceptor Timeout for tokens.")
+
+                if not self.skype_token and not self.graph_token:
+                    raise Exception("Failed to capture any valid MSAL tokens from Teams session.")
+
+                self._save_cached_tokens()
+            finally:
+                await browser.close()
+
+    def _ensure_auth(self, force_refresh=False):
+        if force_refresh:
+            self._clear_cache()
+
+        if not self.skype_token or not self.graph_token:
+            if not force_refresh and self._load_cached_tokens():
+                return
             try:
-                print("📅 Clicking Calendar Tab...")
-                page.locator('button[data-tid="app-bar-calendar"]').first.click(timeout=3000)
-                page.wait_for_timeout(3000)
-            except Exception:
-                page.goto("https://teams.microsoft.com/v2/#/calendar", wait_until="domcontentloaded", timeout=15000)
-                page.wait_for_timeout(3000)
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(self._get_tokens_silently())
+                loop.close()
+            except Exception as e:
+                print(f"❌ [DEBUG] Auth Capture Error: {e}")
+                self.last_errors.append(f"Auth Capture Error: {str(e)}")
 
-            browser.close()
+    def fetch_dashboard_data(self, is_retry=False) -> dict:
+        self.last_errors = []
+        self._ensure_auth(force_refresh=is_retry)
 
-        # ==================================================================
-        # POST-PROCESSING
-        # ==================================================================
-        unique_meetings_dict = {}
-        for m in extracted_meetings:
-            url = m["join_url"]
-            if url not in unique_meetings_dict or m["start_time"] is not None:
-                unique_meetings_dict[url] = m
+        teams_data = []
+        chats = []
+        calls = []
+        needs_retry = False
 
-        unique_cal = list({c["subject"]: c for c in extracted_calendar}.values())
+        # 1. Fetch Teams (Graph API)
+        if self.graph_token:
+            headers = {"Authorization": self.graph_token, "Accept": "application/json"}
+            try:
+                res = requests.get("https://graph.microsoft.com/v1.0/me/joinedTeams", headers=headers, timeout=30)
+                if res.status_code == 401:
+                    needs_retry = True
+                elif res.status_code == 200:
+                    for team in res.json().get("value", []):
+                        chan_res = requests.get(f"https://graph.microsoft.com/v1.0/teams/{team['id']}/channels",
+                                                headers=headers, timeout=20)
+                        chans = chan_res.json().get("value", []) if chan_res.status_code == 200 else []
+                        teams_data.append({"id": team["id"], "displayName": team["displayName"], "channels": chans})
+                else:
+                    print(f"❌ [CONSOLE ERROR] Teams Graph API failed with status {res.status_code}: {res.text}")
+                    self.last_errors.append(f"Teams API Error {res.status_code}")
+            except Exception as e:
+                print(f"❌ [CONSOLE EXCEPTION] Teams Request Exception: {e}")
+                self.last_errors.append(f"Teams Exception: {str(e)}")
 
-        seen_a, deduped_a = set(), []
-        for a in extracted_announcements:
-            k = (a["sender"], a["message"][:80], a["timestamp"])
-            if k in seen_a: continue
-            seen_a.add(k)
-            deduped_a.append(a)
-        deduped_a.sort(key=lambda x: str(x.get("timestamp") or ""), reverse=True)
+        # 2. Fetch Chats using Graph API (Beta endpoint handles chat list cleanly)
+        if self.graph_token:
+            headers = {"Authorization": self.graph_token, "Accept": "application/json"}
+            chat_url = "https://graph.microsoft.com/beta/me/chats?$expand=lastMessagePreview&$top=20"
+            try:
+                res = requests.get(chat_url, headers=headers, timeout=15)
+                print(f"🔍 [CONSOLE DEBUG] Graph Chat API Response Status: {res.status_code}")
 
-        formatted_chats = []
-        all_ids = set(conv_meta.keys()) | set(conv_history.keys())
-        for cid in all_ids:
-            meta = conv_meta.get(cid, {})
-            history = conv_history.get(cid, [])
+                if res.status_code == 401:
+                    needs_retry = True
+                elif res.status_code == 200:
+                    data = res.json()
+                    for chat in data.get("value", []):
+                        topic = chat.get("topic")
+                        chat_type = chat.get("chatType", "")
 
-            name = meta.get("name") or ""
-            if not name and history:
-                senders = []
-                for m in history:
-                    s = m.get("sender")
-                    if s and s != "Unknown" and s not in senders:
-                        senders.append(s)
-                name = ", ".join(senders[:3])
-            if not name: name = "Chat"
+                        title = topic if topic else ("1-on-1 Chat" if chat_type == "oneOnOne" else "Group Chat")
 
-            last_body = meta.get("preview_body") or ""
-            last_sender = meta.get("preview_sender") or ""
-            last_time = meta.get("preview_ts") or ""
+                        preview = chat.get("lastMessagePreview", {})
+                        content = preview.get("body", {}).get("content", "")
+                        clean_text = self._clean_text(content) if content else "No recent messages..."
 
-            if history:
-                last = history[-1]
-                if not last_body or _is_garbage(last_body): last_body = last["message"]
-                if not last_sender: last_sender = last["sender"]
-                if not last_time: last_time = last["timestamp"]
+                        sender = "Unknown"
+                        if preview.get("from") and preview.get("from").get("user"):
+                            sender = preview.get("from").get("user").get("displayName", "Unknown")
 
-            # Double check our system filter against the preview
-            if "Recording stopped" in last_body or "false false callStarted" in last_body:
-                last_body = "Message history available."
+                        chats.append(
+                            {"id": chat.get("id"), "title": title, "sender": sender, "last_message": clean_text[:120]})
+                else:
+                    # PRINT FULL ERROR TO CONSOLE SO YOU CAN READ IT CLEARLY
+                    print(
+                        f"❌ [CONSOLE ERROR] Graph Chat API Failed:\nURL: {chat_url}\nStatus: {res.status_code}\nResponse: {res.text}")
+                    self.last_errors.append(f"Graph Chat Error {res.status_code} (Check Console)")
+            except Exception as e:
+                print(f"❌ [CONSOLE EXCEPTION] Graph Chat Request Exception: {e}")
+                self.last_errors.append(f"Chat Exception: {str(e)}")
+        else:
+            self.last_errors.append("Missing Graph Token for Chats.")
 
-            formatted_chats.append({
-                "id": cid,
-                "name": name,
-                "last_sender": last_sender,
-                "last_message": last_body,
-                "latest_time": last_time,
-                "messages": history,
-                "teams_url": f"https://teams.microsoft.com/l/chat/{cid}/conversations",
-            })
-        
-        formatted_chats.sort(key=lambda x: str(x.get("latest_time") or ""), reverse=True)
+        # 3. Fetch Calls (Graph API)
+        if self.graph_token:
+            headers = {"Authorization": self.graph_token, "Accept": "application/json"}
+            call_url = "https://graph.microsoft.com/v1.0/me/events?$select=subject,start,end,isOnlineMeeting&$top=25"
+            try:
+                res = requests.get(call_url, headers=headers, timeout=15)
+                if res.status_code == 401:
+                    needs_retry = True
+                elif res.status_code == 200:
+                    for ev in res.json().get("value", []):
+                        if ev.get("isOnlineMeeting"):
+                            calls.append({"subject": ev.get("subject", "Call / Online Meeting"),
+                                          "start_time": ev.get("start", {}).get("dateTime", "")})
+            except Exception as e:
+                print(f"❌ [CONSOLE EXCEPTION] Calls Exception: {e}")
+
+        if needs_retry and not is_retry:
+            print("⚠️ Token Expired (401). Retrying once...")
+            return self.fetch_dashboard_data(is_retry=True)
 
         return {
-            "announcements": deduped_a[:15],
-            "chats": formatted_chats[:15],
-            "meetings": list(unique_meetings_dict.values())[:15],
-            "assignments": [],
-            "calendar": unique_cal[:10],
+            "teams": teams_data,
+            "chats": chats,
+            "calls": calls,
+            "errors": self.last_errors,
+            "debug": {"has_graph": bool(self.graph_token), "has_skype": bool(self.skype_token)}
         }
 
-    except Exception as e:
-        print(f"CRITICAL BACKEND ERROR: {e}")
-        return {"announcements": [], "chats": [], "meetings": [], "assignments": [], "calendar": []}
+    def fetch_chat_history(self, chat_id: str) -> list:
+        """Fetches messages inside a specific Chat using Graph API."""
+        if not self.graph_token: return []
+        headers = {"Authorization": self.graph_token, "Accept": "application/json"}
+
+        url = f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}/messages?$top=20"
+
+        try:
+            res = requests.get(url, headers=headers, timeout=15)
+            if res.status_code == 200:
+                msgs = []
+                for msg in res.json().get("value", []):
+                    content = msg.get("body", {}).get("content", "")
+                    clean_text = self._clean_text(content)
+
+                    sender = "Unknown"
+                    if msg.get("from") and msg.get("from").get("user"):
+                        sender = msg.get("from").get("user").get("displayName", "Unknown")
+
+                    if clean_text: msgs.append({"sender": sender, "content": clean_text})
+                return msgs
+            else:
+                print(f"❌ [CONSOLE ERROR] Fetch Chat History Failed ({res.status_code}): {res.text}")
+        except Exception as e:
+            print(f"❌ [CONSOLE EXCEPTION] Fetch Chat History Exception: {e}")
+        return []
+
+    def fetch_channel_messages(self, team_id: str, channel_id: str) -> list:
+        if not self.graph_token: return []
+        headers = {"Authorization": self.graph_token, "Accept": "application/json"}
+        try:
+            res = requests.get(
+                f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{channel_id}/messages?$top=20",
+                headers=headers, timeout=30)
+            if res.status_code == 200:
+                msgs = []
+                for msg in res.json().get("value", []):
+                    content = msg.get("body", {}).get("content", "")
+                    clean_text = self._clean_text(content)
+
+                    sender = "Unknown"
+                    if msg.get("from") and msg.get("from").get("user"):
+                        sender = msg.get("from").get("user").get("displayName", "Unknown")
+
+                    if clean_text: msgs.append({"sender": sender, "content": clean_text})
+                return msgs
+        except Exception as e:
+            print(f"Channel Msg Fetch Error: {e}")
+        return []
+
+
+# --- Global Instance & Top-Level Exports ---
+_teams_backend_instance = TeamsBackend()
+
+
+def fetch_dashboard_data() -> dict: return _teams_backend_instance.fetch_dashboard_data()
+
+
+def fetch_chat_history(chat_id: str) -> list: return _teams_backend_instance.fetch_chat_history(chat_id)
+
+
+def fetch_channel_messages(team_id: str,
+                           channel_id: str) -> list: return _teams_backend_instance.fetch_channel_messages(team_id,
+                                                                                                           channel_id)
