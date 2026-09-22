@@ -87,47 +87,63 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
     """State-driven Microsoft 2FA login flow."""
     totp = pyotp.TOTP(totp_secret)
 
+    print("🌐 Navigating to eBwise login page...")
     await page.goto("https://ebwise.mmu.edu.my/login/index.php", timeout=30000)
 
-    # Trigger Microsoft SSO if on local eBwise page
+    # 1. Trigger Microsoft SSO and VERIFY REDIRECT
     if "microsoftonline.com" not in page.url:
+        print("🔄 Clicking Microsoft 365 SSO button...")
         try:
-            await page.click('text="Microsoft 365"', timeout=3000)
-        except Exception:
-            try:
-                await page.click('text="OpenID Connect"', timeout=2000)
-            except Exception:
-                pass
+            # Target Moodle SSO buttons securely
+            sso_btn = page.locator('a[title="Microsoft 365"], text="Microsoft 365", text="OpenID Connect"').first
+            await sso_btn.wait_for(state="visible", timeout=5000)
+            await sso_btn.click()
 
-    await asyncio.sleep(2)
-    if "ebwise.mmu.edu.my" in page.url and "login" not in page.url:
-        return True
+            print("⏳ Waiting for redirect to Microsoft Login...")
+            # We explicitly halt execution until the URL changes to Microsoft
+            await page.wait_for_url(lambda url: "microsoftonline.com" in url, timeout=15000)
+        except Exception as e:
+            print(f"⚠️ Warning during SSO redirect: {e}")
 
-    # Check for Account Picker Tile (e.g. remembered email)
+    if "microsoftonline.com" not in page.url:
+        if "ebwise.mmu.edu.my" in page.url and "login" not in page.url:
+            return True
+        raise Exception("Failed to reach Microsoft login page. Still stuck on eBwise.")
+
+    await asyncio.sleep(1)
+
+    # 2. Check for Account Picker Tile (e.g. remembered email)
     try:
         account_tile = page.locator(f'div[data-test-id="{email}"], text="{email}"').first
-        if await account_tile.is_visible(timeout=2000):
+        if await account_tile.is_visible(timeout=3000):
             print("👤 Clicking remembered account tile...")
             await account_tile.click()
             await asyncio.sleep(1.5)
     except Exception:
         pass
 
-    # State Check: Is Email Step actually visible?
-    email_field = page.locator('input[type="email"]:visible, input[name="loginfmt"]:visible').first
-    password_field = page.locator('input[type="password"]:visible, input[name="passwd"]:visible').first
+    # 3. Dynamic Field Polling (Wait for either Email OR Password to appear)
+    print("🔍 Identifying current Microsoft login step...")
+    email_field = page.locator('input[type="email"], input[name="loginfmt"]').first
+    password_field = page.locator('input[type="password"], input[name="passwd"]').first
 
-    if await email_field.is_visible(timeout=2000) and not await password_field.is_visible(timeout=500):
-        print("📧 Filling email field...")
-        await email_field.fill(email)
-        await page.click('input[type="submit"], input[id="idSIButton9"]')
-        await asyncio.sleep(2)
+    for _ in range(15):  # Poll for up to 15 seconds
+        if await email_field.is_visible():
+            print("📧 Filling email field...")
+            await email_field.fill(email)
+            await page.click('input[type="submit"], input[id="idSIButton9"]')
+            await asyncio.sleep(2)
+            break
+        elif await password_field.is_visible():
+            print("⏩ Email step skipped (Password field already visible).")
+            break
+        await asyncio.sleep(1)
 
     await handle_security_interrupts(page)
 
-    # Password Step
-    password_field = page.locator('input[type="password"]:visible, input[name="passwd"]:visible').first
+    # 4. Password Step
     try:
+        print("⏳ Waiting for password field...")
         await password_field.wait_for(state="visible", timeout=8000)
         print("🔑 Filling password field...")
         await password_field.fill(password)
@@ -136,10 +152,13 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
     except Exception:
         if "ebwise.mmu.edu.my" in page.url and "login" not in page.url:
             return True
+        else:
+            raise Exception("Password field did not appear in time.")
 
     await handle_security_interrupts(page)
 
-    # 2FA Option Selection
+    # 5. 2FA Option Selection
+    print("🛡️ Processing 2FA...")
     for text_sel in [
         'text="I can\'t use my Microsoft Authenticator app right now"',
         'text="Use a verification code"',
@@ -148,21 +167,27 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
         try:
             opt = page.locator(text_sel).first
             if await opt.is_visible(timeout=2000):
+                print(f"🖱️ Clicking 2FA alternative: {text_sel}")
                 await opt.click()
                 await asyncio.sleep(1)
         except Exception:
             pass
 
     otc_input = page.locator('input[name="otc"]:visible').first
-    await otc_input.wait_for(state="visible", timeout=10000)
+    try:
+        print("⏳ Waiting for 2FA code input field...")
+        await otc_input.wait_for(state="visible", timeout=10000)
+    except Exception:
+        raise Exception("Could not find the 2FA (OTC) input field.")
 
     # TOTP timing check
     time_left = 30 - (int(time.time()) % 30)
     if time_left < 3:
         await asyncio.sleep(time_left + 0.5)
 
-    print(f"🔢 Submitting TOTP Code: {totp.now()}")
-    await otc_input.fill(totp.now())
+    current_code = totp.now()
+    print(f"🔢 Submitting TOTP Code: {current_code}")
+    await otc_input.fill(current_code)
 
     # Check "Don't ask again for 1 day"
     await _try_check_persist_checkbox(page)
@@ -172,15 +197,17 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
 
     await handle_security_interrupts(page)
 
-    # "Stay signed in?" Prompt
+    # 6. "Stay signed in?" Prompt
     try:
         stay_btn = page.locator('input[id="idSIButton9"], input[value="Yes"]').first
         if await stay_btn.is_visible(timeout=3000):
+            print("✅ Handling 'Stay signed in?' prompt...")
             await _try_check_persist_checkbox(page)
             await stay_btn.click()
     except Exception:
         pass
 
+    print("⏳ Waiting for successful redirect back to eBwise...")
     await page.wait_for_url(lambda url: "ebwise.mmu.edu.my" in url and "login" not in url, timeout=20000)
     return True
 
@@ -242,16 +269,16 @@ async def run_daily_login_async(creds: dict) -> bool:
             session_authenticated = await is_session_valid(test_page)
 
             if session_authenticated:
-                context = test_context # Keep using this context
+                context = test_context  # Keep using this context
             else:
                 print("🗑️ Session expired. Nuking old session data to start completely fresh...")
                 await test_context.close()
-                os.remove(SESSION_FILE) # Delete the bad cookie file
+                if os.path.exists(SESSION_FILE):
+                    os.remove(SESSION_FILE)  # Delete the bad cookie file
 
         # 2. Perform Fresh Login if needed
         if not session_authenticated:
             print("✨ Spawning pristine browser context for a clean login...")
-            # Notice we do NOT pass storage_state here, ensuring a 100% clean browser
             context = await browser.new_context(**base_context_kwargs)
             page = await context.new_page()
 
@@ -277,7 +304,7 @@ async def run_daily_login_async(creds: dict) -> bool:
 
         await browser.close()
         return False
-#try 2
+
+
 def run_daily_login(creds: dict) -> bool:
     return asyncio.run(run_daily_login_async(creds))
-

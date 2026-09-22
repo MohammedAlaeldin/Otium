@@ -128,37 +128,50 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
         )
         page = context.new_page()
 
-        # ... (rest of the login logic remains exactly the same as previously provided) ...
-
         try:
-            # 1. NAVIGATION
-            page.goto("https://ebwise.mmu.edu.my/login/index.php", wait_until="networkidle")
+            # 1. NAVIGATION & SSO REDIRECT
+            page.goto("https://ebwise.mmu.edu.my/login/index.php", wait_until="domcontentloaded")
 
-            login_btn = (
-                page.locator('text="Microsoft 365"')
-                .or_(page.locator('text="OpenID Connect"'))
-                .or_(page.locator('a:has-text("Log in")'))
-            )
-            login_btn.first.click(timeout=8000)
-            time.sleep(1.5)
+            if "microsoftonline.com" not in page.url:
+                login_btn = (
+                    page.locator('a[title="Microsoft 365"]')
+                    .or_(page.locator('text="Microsoft 365"'))
+                    .or_(page.locator('text="OpenID Connect"'))
+                )
+                login_btn.first.click(timeout=8000)
+
+                # Pause execution until Microsoft URL loads
+                print("⏳ Waiting for redirect to Microsoft Login...")
+                page.wait_for_url(lambda url: "microsoftonline.com" in url, timeout=15000)
+
+            time.sleep(1)
 
             # Check for remembered account tile
             try:
                 account_tile = page.locator(f'div[data-test-id="{user_email}"], text="{user_email}"').first
                 if account_tile.is_visible(timeout=2000):
+                    print("👤 Clicking remembered account tile...")
                     account_tile.click()
                     time.sleep(1.5)
             except Exception:
                 pass
 
-            # State check: Is email input visible and NOT password input?
-            email_input = page.locator('input[type="email"]:visible, input[name="loginfmt"]:visible').first
-            password_input = page.locator('input[type="password"]:visible, input[name="passwd"]:visible').first
+            # Dynamic Polling: Wait for Email OR Password field
+            email_input = page.locator('input[type="email"], input[name="loginfmt"]').first
+            password_input = page.locator('input[type="password"], input[name="passwd"]').first
 
-            if email_input.is_visible(timeout=2000) and not password_input.is_visible(timeout=500):
-                email_input.fill(user_email)
-                page.locator('input[type="submit"]').click()
-                time.sleep(2)
+            for _ in range(15):
+                if email_input.is_visible():
+                    print("📧 Filling email field...")
+                    email_input.fill(user_email)
+                    time.sleep(0.5)
+                    page.locator('input[type="submit"], input[id="idSIButton9"]').first.click()
+                    time.sleep(2)
+                    break
+                elif password_input.is_visible():
+                    print("⏩ Email step skipped (Password field already visible).")
+                    break
+                time.sleep(1)
 
             email_error = (
                 page.locator("#usernameError")
@@ -179,9 +192,10 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
                 browser.close()
                 return False, "EMAIL_ERROR: Password field not visible."
 
+            print("🔑 Filling password field...")
             password_input.fill(user_password)
-            page.locator('input[type="submit"]').click()
-            time.sleep(2)
+            page.locator('input[type="submit"], input[id="idSIButton9"]').first.click()
+            time.sleep(2.5)
 
             pwd_error = page.locator("#passwordError").or_(page.locator("text='Your account or password is incorrect'"))
             if pwd_error.is_visible():
@@ -220,7 +234,7 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
             otc_input.fill(current_code)
             _try_check_persist_checkbox(page)
 
-            page.locator('input[type="submit"]').click()
+            page.locator('input[type="submit"], input[id="idSIButton9"]').first.click()
             time.sleep(2)
 
             totp_error = (
@@ -287,4 +301,3 @@ def open_authenticated_service(target_url: str):
         page.goto(target_url)
         page.wait_for_timeout(300000)
     return True
-#try 2
