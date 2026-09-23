@@ -65,7 +65,8 @@ def _get_official_app_token(session: requests.Session, state: dict) -> str | Non
         valid_wstoken = None
         for candidate in candidate_tokens:
             try:
-                test_payload = {"wstoken": candidate, "wsfunction": "core_webservice_get_site_info", "moodlewsrestformat": "json"}
+                test_payload = {"wstoken": candidate, "wsfunction": "core_webservice_get_site_info",
+                                "moodlewsrestformat": "json"}
                 test_res = session.post(REST_ENDPOINT, data=test_payload, timeout=10).json()
                 if isinstance(test_res, dict) and test_res.get("exception"):
                     continue
@@ -99,12 +100,21 @@ def _attach_token(fileurl: str, wstoken: str) -> str:
     return f"{fileurl}{sep}token={wstoken}"
 
 
-def fetch_ebwise_data(classification: str = "inprogress", progress_callback=None, cancel_event: threading.Event = None) -> dict:
+def _clean_html_text(text: str) -> str:
+    if not text:
+        return ""
+    clean = re.sub(r'<[^>]+>', '', text)
+    return clean.strip()
+
+
+def fetch_ebwise_data(classification: str = "inprogress", progress_callback=None,
+                      cancel_event: threading.Event = None) -> dict:
     if not os.path.exists(SESSION_FILE):
         return {"status": "EXPIRED"}
 
     master_session = requests.Session()
-    master_session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"})
+    master_session.headers.update(
+        {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"})
 
     try:
         state = _load_cookies_into_session(master_session)
@@ -117,9 +127,11 @@ def fetch_ebwise_data(classification: str = "inprogress", progress_callback=None
         except RuntimeError as e:
             if "invalidtoken" in str(e).lower():
                 state.pop("wstoken", None)
-                with open(SESSION_FILE, "w") as f: json.dump(state, f, indent=2)
+                with open(SESSION_FILE, "w") as f:
+                    json.dump(state, f, indent=2)
                 wstoken = _get_official_app_token(master_session, state)
-                if not wstoken or (cancel_event and cancel_event.is_set()): return {"status": "CANCELLED" if cancel_event and cancel_event.is_set() else "NO_TOKEN"}
+                if not wstoken or (cancel_event and cancel_event.is_set()): return {
+                    "status": "CANCELLED" if cancel_event and cancel_event.is_set() else "NO_TOKEN"}
                 site_info = _ws_call(master_session, wstoken, "core_webservice_get_site_info")
             else:
                 raise e
@@ -127,7 +139,8 @@ def fetch_ebwise_data(classification: str = "inprogress", progress_callback=None
         if cancel_event and cancel_event.is_set():
             return {"status": "CANCELLED"}
 
-        courses_res = _ws_call(master_session, wstoken, "core_course_get_enrolled_courses_by_timeline_classification", classification=classification, limit=0, offset=0)
+        courses_res = _ws_call(master_session, wstoken, "core_course_get_enrolled_courses_by_timeline_classification",
+                               classification=classification, limit=0, offset=0)
         course_list = courses_res.get("courses", [])
 
         formatted_courses = []
@@ -141,26 +154,68 @@ def fetch_ebwise_data(classification: str = "inprogress", progress_callback=None
             if not cid: return None
 
             thread_session = requests.Session()
-            thread_session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
+            thread_session.headers.update(
+                {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
             _load_cookies_into_session(thread_session)
 
-            files = []
+            parsed_sections = []
+            files_flat = []
+
             try:
                 sections = _ws_call(thread_session, wstoken, "core_course_get_contents", courseid=cid)
                 for section in sections:
                     if cancel_event and cancel_event.is_set(): break
-                    section_name = section.get("name") or "General"
+
+                    sec_name = _clean_html_text(section.get("name")) or "General"
+                    sec_uservisible = section.get("uservisible", True)
+                    sec_visible = bool(section.get("visible", 1))
+                    availability = _clean_html_text(section.get("availabilityinfo", ""))
+
+                    modules_list = []
                     for module in section.get("modules", []):
-                        mod_title = module.get("name")
+                        mod_title = _clean_html_text(module.get("name")) or "Item"
+                        mod_type = module.get("modname", "resource")
+                        mod_uservisible = module.get("uservisible", True)
+                        mod_visible = bool(module.get("visible", 1))
+                        mod_availability = _clean_html_text(module.get("availabilityinfo", ""))
+
+                        contents_items = []
                         module_contents = module.get("contents") or []
+
                         if module_contents:
                             for c in module_contents:
                                 fileurl = c.get("fileurl")
                                 if fileurl: fileurl = _attach_token(fileurl, wstoken)
-                                files.append({"title": c.get("filename") or mod_title, "fileurl": fileurl, "section": section_name, "type": module.get("modname")})
+                                title = c.get("filename") or mod_title
+                                contents_items.append({"title": title, "fileurl": fileurl, "type": mod_type})
+                                files_flat.append(
+                                    {"title": title, "fileurl": fileurl, "section": sec_name, "type": mod_type})
                         else:
-                            mod_url = module.get("url")
-                            if mod_url: files.append({"title": mod_title, "fileurl": mod_url, "section": section_name, "type": module.get("modname")})
+                            mod_url = module.get(
+                                "url") or f"{EBWISE_BASE_URL}/mod/{mod_type}/view.php?id={module.get('id')}"
+                            contents_items.append({"title": mod_title, "fileurl": mod_url, "type": mod_type})
+                            files_flat.append(
+                                {"title": mod_title, "fileurl": mod_url, "section": sec_name, "type": mod_type})
+
+                        modules_list.append({
+                            "id": module.get("id"),
+                            "title": mod_title,
+                            "type": mod_type,
+                            "uservisible": mod_uservisible,
+                            "visible": mod_visible,
+                            "availabilityinfo": mod_availability,
+                            "contents": contents_items
+                        })
+
+                    parsed_sections.append({
+                        "id": section.get("id"),
+                        "name": sec_name,
+                        "uservisible": sec_uservisible,
+                        "visible": sec_visible,
+                        "availabilityinfo": availability,
+                        "modules": modules_list
+                    })
+
             except Exception as e:
                 print(f"⚠️ Could not fetch contents for '{fullname}': {e}")
 
@@ -184,7 +239,8 @@ def fetch_ebwise_data(classification: str = "inprogress", progress_callback=None
             return {
                 "id": cid,
                 "fullname": fullname,
-                "files": files,
+                "sections": parsed_sections,
+                "files": files_flat,
                 "instructors": instructors
             }
 

@@ -6,21 +6,17 @@ from playwright.async_api import async_playwright
 
 from storage import SESSION_FILE
 
-# Global timeouts for deployment scaling
-PAGE_TIMEOUT = 90000  # 90 seconds for heavy page loads
-ELEM_TIMEOUT = 30000  # 30 seconds for specific UI element interactivity
-FAST_TIMEOUT = 3000  # 3 seconds for optional popups (interrupts, persist checkboxes)
-
 
 async def is_session_valid(page) -> bool:
-    """Navigates directly to eBwise (/my/). If active cookies exist, bypasses authentication."""
+    """Navigates straight to eBwise (/my/). If valid, loads without login prompts."""
     try:
         print("🌐 Navigating straight to eBwise Dashboard (/my/)...")
-        await page.goto("https://ebwise.mmu.edu.my/my/", timeout=PAGE_TIMEOUT)
-        await page.wait_for_load_state("domcontentloaded", timeout=ELEM_TIMEOUT)
+        await page.goto("https://ebwise.mmu.edu.my/my/", timeout=20000)
+        await page.wait_for_load_state("domcontentloaded")
         await asyncio.sleep(1.5)
 
         current_url = page.url
+
         if any(keyword in current_url for keyword in ["login", "microsoftonline", "openid"]):
             print("🔑 Existing cookies expired or invalid. Full re-auth needed.")
             return False
@@ -28,13 +24,14 @@ async def is_session_valid(page) -> bool:
         if "ebwise.mmu.edu.my" in current_url:
             print("🟢 Active session detected! Reusing existing cookies instantly.")
             return True
+
     except Exception as e:
-        print(f"⚠️ Session check issue (Network may be slow): {e}")
+        print(f"⚠️ Session check issue: {e}")
     return False
 
 
 async def handle_security_interrupts(page):
-    """Bypasses Microsoft passkey prompts or 'Skip for now' screens."""
+    """Bypasses Microsoft passkey prompts, 'Make your account secure', or 'Skip for now' screens."""
     interrupt_selectors = [
         'text=/skip for now/i',
         'text=/ask later/i',
@@ -48,13 +45,13 @@ async def handle_security_interrupts(page):
             if await btn.is_visible(timeout=1500):
                 print(f"🛡️ Skipping security interrupt: {sel}")
                 await btn.click()
-                await asyncio.sleep(1)
+                await asyncio.sleep(1.5)
         except Exception:
             pass
 
 
 async def _try_check_persist_checkbox(page):
-    """Targets the 'Don't ask again for 1 day' / persistence checkbox without freezing."""
+    """Targets the 'Don't ask again for 1 day' / persistence checkbox safely."""
     known_selectors = [
         '#idChkBx_SAOTCC_TD',  # Standard 2FA "Don't ask again for 1 day" checkbox
         '#KmsiCheckboxField',  # "Stay signed in?" checkbox
@@ -63,18 +60,19 @@ async def _try_check_persist_checkbox(page):
     for sel in known_selectors:
         try:
             checkbox = page.locator(sel)
-            if await checkbox.is_visible(timeout=FAST_TIMEOUT):
+            if await checkbox.is_visible(timeout=1000):
                 if not await checkbox.is_checked():
                     await checkbox.check(force=True)
                     print(f"☑️ Checked persistence checkbox: {sel}")
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.5)  # Let JS register checked state
                 return True
         except Exception:
             continue
 
+    # Fallback targeting label text specifically containing '1 day' or 'don't ask'
     try:
         label = page.locator("text=/don't ask again|1 day|don't show this again/i").first
-        if await label.is_visible(timeout=FAST_TIMEOUT):
+        if await label.is_visible(timeout=1000):
             await label.click(force=True)
             print("☑️ Checked persistence checkbox via '1 day' label click")
             await asyncio.sleep(0.5)
@@ -85,261 +83,228 @@ async def _try_check_persist_checkbox(page):
     return False
 
 
-async def authenticate_with_credentials(page, email: str, password: str, totp_secret: str) -> tuple[bool, str]:
+async def authenticate_with_credentials(page, email: str, password: str, totp_secret: str) -> bool:
     """State-driven Microsoft 2FA login flow."""
-    clean_secret = totp_secret.replace(" ", "").strip()
-    totp = pyotp.TOTP(clean_secret)
+    totp = pyotp.TOTP(totp_secret)
 
     print("🌐 Navigating to eBwise login page...")
-    await page.goto("https://ebwise.mmu.edu.my/login/index.php", wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
+    await page.goto("https://ebwise.mmu.edu.my/login/index.php", timeout=30000)
 
-    # 1. TRIGGER SSO REDIRECT
+    # 1. Trigger Microsoft SSO and VERIFY REDIRECT
     if "microsoftonline.com" not in page.url:
         print("🔄 Clicking Microsoft 365 SSO button...")
-        sso_btn = (
-            page.locator('a[title="Microsoft 365"]')
-            .or_(page.locator('text="Microsoft 365"'))
-            .or_(page.locator('text="OpenID Connect"'))
-        )
         try:
-            await sso_btn.first.click(timeout=ELEM_TIMEOUT)
+            # Target Moodle SSO buttons securely
+            sso_btn = page.locator('a[title="Microsoft 365"], text="Microsoft 365", text="OpenID Connect"').first
+            await sso_btn.wait_for(state="visible", timeout=5000)
+            await sso_btn.click()
+
             print("⏳ Waiting for redirect to Microsoft Login...")
-            await page.wait_for_url(lambda url: "microsoftonline.com" in url, timeout=PAGE_TIMEOUT)
+            # We explicitly halt execution until the URL changes to Microsoft
+            await page.wait_for_url(lambda url: "microsoftonline.com" in url, timeout=15000)
         except Exception as e:
             print(f"⚠️ Warning during SSO redirect: {e}")
 
-        if "microsoftonline.com" not in page.url:
-            if "ebwise.mmu.edu.my" in page.url and "login" not in page.url:
-                return True, "Login Successful! Session saved."
-            return False, "TIMEOUT_ERROR: Failed to reach Microsoft login page."
+    if "microsoftonline.com" not in page.url:
+        if "ebwise.mmu.edu.my" in page.url and "login" not in page.url:
+            return True
+        raise Exception("Failed to reach Microsoft login page. Still stuck on eBwise.")
 
     await asyncio.sleep(1)
 
-    # 2. ACCOUNT PICKER TILE (If email was remembered)
+    # 2. Check for Account Picker Tile (e.g. remembered email)
     try:
         account_tile = page.locator(f'div[data-test-id="{email}"], text="{email}"').first
-        if await account_tile.is_visible(timeout=FAST_TIMEOUT):
+        if await account_tile.is_visible(timeout=3000):
             print("👤 Clicking remembered account tile...")
             await account_tile.click()
             await asyncio.sleep(1.5)
     except Exception:
         pass
 
-    # 3. DYNAMIC DOM SYNC (Email vs Password)
-    email_input = page.locator('input[type="email"], input[name="loginfmt"]').first
-    password_input = page.locator('input[type="password"], input[name="passwd"]').first
+    # 3. Dynamic Field Polling (Wait for either Email OR Password to appear)
+    print("🔍 Identifying current Microsoft login step...")
+    email_field = page.locator('input[type="email"], input[name="loginfmt"]').first
+    password_field = page.locator('input[type="password"], input[name="passwd"]').first
 
-    try:
-        # Waits exactly for whichever field appears first, eliminating arbitrary sleeps
-        await email_input.or_(password_input).wait_for(state="visible", timeout=ELEM_TIMEOUT)
-
-        if await email_input.is_visible():
-            print("📧 Filling email field exactly as it rendered...")
-            await email_input.fill(email)
-            await page.locator('input[type="submit"], input[id="idSIButton9"]').first.click()
-            await asyncio.sleep(1.5)
-        else:
+    for _ in range(15):  # Poll for up to 15 seconds
+        if await email_field.is_visible():
+            print("📧 Filling email field...")
+            await email_field.fill(email)
+            await page.click('input[type="submit"], input[id="idSIButton9"]')
+            await asyncio.sleep(2)
+            break
+        elif await password_field.is_visible():
             print("⏩ Email step skipped (Password field already visible).")
-    except Exception:
-        return False, "TIMEOUT_ERROR: Login fields failed to load."
-
-    email_error = (
-        page.locator("#usernameError")
-        .or_(page.locator("text='Enter a valid email address'"))
-        .or_(page.locator("text=\"That Microsoft account doesn't exist\""))
-    )
-    if await email_error.is_visible():
-        return False, "EMAIL_ERROR: Microsoft rejected this email address."
+            break
+        await asyncio.sleep(1)
 
     await handle_security_interrupts(page)
 
-    # 4. PASSWORD STEP
+    # 4. Password Step
     try:
-        await password_input.wait_for(state="visible", timeout=ELEM_TIMEOUT)
+        print("⏳ Waiting for password field...")
+        await password_field.wait_for(state="visible", timeout=8000)
         print("🔑 Filling password field...")
-        await password_input.fill(password)
-        await page.locator('input[type="submit"], input[id="idSIButton9"]').first.click()
-        await asyncio.sleep(2)
+        await password_field.fill(password)
+        await page.click('input[type="submit"], input[id="idSIButton9"]')
+        await asyncio.sleep(2.5)
     except Exception:
         if "ebwise.mmu.edu.my" in page.url and "login" not in page.url:
-            return True, "Login Successful! Session saved."
-        return False, "TIMEOUT_ERROR: Password field not interactable."
-
-    pwd_error = page.locator("#passwordError").or_(page.locator("text='Your account or password is incorrect'"))
-    if await pwd_error.is_visible():
-        return False, "PASSWORD_ERROR: Incorrect password."
+            return True
+        else:
+            raise Exception("Password field did not appear in time.")
 
     await handle_security_interrupts(page)
 
-    # 5. 2FA HANDSHAKE & SUBMISSION
-    await asyncio.sleep(1)
-    for selector in [
-        'a[id="idA_SASTP_SASS_OTC"]',
+    # 5. 2FA Option Selection
+    print("🛡️ Processing 2FA...")
+    for text_sel in [
         'text="I can\'t use my Microsoft Authenticator app right now"',
         'text="Use a verification code"',
         'text=/verification code/i'
     ]:
         try:
-            loc = page.locator(selector).first
-            if await loc.is_visible(timeout=1500):
-                print(f"🖱️ Clicking 2FA alternative: {selector}")
-                await loc.click()
+            opt = page.locator(text_sel).first
+            if await opt.is_visible(timeout=2000):
+                print(f"🖱️ Clicking 2FA alternative: {text_sel}")
+                await opt.click()
                 await asyncio.sleep(1)
-                break
         except Exception:
             pass
 
     otc_input = page.locator('input[name="otc"]:visible').first
     try:
-        await otc_input.wait_for(state="visible", timeout=ELEM_TIMEOUT)
+        print("⏳ Waiting for 2FA code input field...")
+        await otc_input.wait_for(state="visible", timeout=10000)
     except Exception:
-        return False, "TIMEOUT_ERROR: Unable to reach 2FA code entry field."
+        raise Exception("Could not find the 2FA (OTC) input field.")
 
-    # TOTP Boundary safeguard
+    # TOTP timing check
     time_left = 30 - (int(time.time()) % 30)
     if time_left < 3:
         await asyncio.sleep(time_left + 0.5)
 
     current_code = totp.now()
     print(f"🔢 Submitting TOTP Code: {current_code}")
-
     await otc_input.fill(current_code)
+
+    # Check "Don't ask again for 1 day"
     await _try_check_persist_checkbox(page)
 
-    await page.locator('input[type="submit"], input[id="idSIButton9"]').first.click()
-    await asyncio.sleep(2.5)
-
-    totp_error = (
-        page.locator('text="That code didn\'t work"')
-        .or_(page.locator('text="More information required"'))
-        .or_(page.locator('#otcError'))
-    )
-    if await totp_error.is_visible():
-        return False, "TOTP_ERROR: Microsoft rejected the code."
+    await page.click('input[type="submit"], input[id="idSIButton9"]')
+    await asyncio.sleep(3)
 
     await handle_security_interrupts(page)
 
-    # 6. "STAY SIGNED IN?" PROMPT (Strictly non-blocking)
+    # 6. "Stay signed in?" Prompt
     try:
-        stay_signed_in_btn = page.locator('input[id="idSIButton9"]').or_(page.locator('input[value="Yes"]')).first
-        if await stay_signed_in_btn.is_visible(timeout=FAST_TIMEOUT):
+        stay_btn = page.locator('input[id="idSIButton9"], input[value="Yes"]').first
+        if await stay_btn.is_visible(timeout=3000):
             print("✅ Handling 'Stay signed in?' prompt...")
             await _try_check_persist_checkbox(page)
-            await stay_signed_in_btn.click(force=True)
-    except Exception as e:
-        print(f"⏩ Skipped 'Stay Signed in' prompt safely: {e}")
-
-    # 7. VERIFY DASHBOARD REDIRECT
-    print("⏳ Waiting for eBwise home dashboard...")
-    try:
-        await page.wait_for_url(lambda url: "ebwise.mmu.edu.my" in url and "login" not in url, timeout=PAGE_TIMEOUT)
+            await stay_btn.click()
     except Exception:
-        return False, "TIMEOUT_ERROR: eBwise dashboard failed to load."
+        pass
 
-    return True, "Login Successful! Session saved."
+    print("⏳ Waiting for successful redirect back to eBwise...")
+    await page.wait_for_url(lambda url: "ebwise.mmu.edu.my" in url and "login" not in url, timeout=20000)
+    return True
 
 
 async def sync_teams(context):
     print("⏳ [Async] Priming Teams session...")
     try:
         page = await context.new_page()
-        await page.goto("https://teams.microsoft.com", timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+        await page.goto("https://teams.microsoft.com", timeout=45000, wait_until="domcontentloaded")
+        try:
+            await page.wait_for_url(lambda url: "teams.microsoft.com" in url or "teams.live.com" in url, timeout=15000)
+        except Exception:
+            pass
         await asyncio.sleep(3)
-        print("✅ Teams session primed.")
+        print("✅ Teams authentication state primed.")
         await page.close()
     except Exception as e:
-        print(f"⚠️ Teams sync skipped/timed out: {e}")
+        print(f"⚠️ Teams sync warning: {e}")
 
 
 async def sync_outlook(context):
     print("⏳ [Async] Priming Outlook session...")
     try:
         page = await context.new_page()
-        await page.goto("https://outlook.office.com/mail/", timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+        await page.goto("https://outlook.office.com/mail/", timeout=30000, wait_until="domcontentloaded")
         await asyncio.sleep(3)
-        print("✅ Outlook session primed.")
+        print("✅ Outlook authentication state primed.")
         await page.close()
     except Exception as e:
-        print(f"⚠️ Outlook sync skipped/timed out: {e}")
+        print(f"⚠️ Outlook sync warning: {e}")
 
 
-async def run_daily_login_async(creds: dict, headless: bool = True, force_fresh: bool = False) -> tuple[bool, str]:
+async def run_daily_login_async(creds: dict) -> bool:
     email = creds.get("email")
     password = creds.get("password")
     totp_secret = creds.get("totp_secret", "").replace(" ", "").strip()
 
     if not email or not password or not totp_secret:
-        return False, "Missing credentials."
+        return False
 
-    max_retries = 3
-    last_msg = "Unknown error"
+    print("🚀 Starting daily auto-login process (Parallel Sync)...")
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=False,
+            args=["--disable-blink-features=AutomationControlled"]
+        )
 
-    for attempt in range(1, max_retries + 1):
-        print(f"🚀 Starting login pipeline (Attempt {attempt}/{max_retries})...")
-        try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(
-                    headless=headless,
-                    args=["--disable-blink-features=AutomationControlled"]
-                )
+        base_context_kwargs = {
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
 
-                context_kwargs = {
-                    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                }
+        # 1. Test Existing Session (If it exists)
+        session_authenticated = False
+        if os.path.exists(SESSION_FILE):
+            print(f"📁 Found existing {SESSION_FILE}, testing session validity...")
+            test_context = await browser.new_context(storage_state=SESSION_FILE, **base_context_kwargs)
+            test_page = await test_context.new_page()
 
-                if force_fresh and os.path.exists(SESSION_FILE):
-                    os.remove(SESSION_FILE)
+            session_authenticated = await is_session_valid(test_page)
 
-                session_authenticated = False
-                if not force_fresh and os.path.exists(SESSION_FILE):
-                    test_context = await browser.new_context(storage_state=SESSION_FILE, **context_kwargs)
-                    test_page = await test_context.new_page()
-                    session_authenticated = await is_session_valid(test_page)
+            if session_authenticated:
+                context = test_context  # Keep using this context
+            else:
+                print("🗑️ Session expired. Nuking old session data to start completely fresh...")
+                await test_context.close()
+                if os.path.exists(SESSION_FILE):
+                    os.remove(SESSION_FILE)  # Delete the bad cookie file
 
-                    if session_authenticated:
-                        context = test_context
-                        last_msg = "Session valid."
-                    else:
-                        await test_context.close()
-                        if os.path.exists(SESSION_FILE):
-                            os.remove(SESSION_FILE)
+        # 2. Perform Fresh Login if needed
+        if not session_authenticated:
+            print("✨ Spawning pristine browser context for a clean login...")
+            context = await browser.new_context(**base_context_kwargs)
+            page = await context.new_page()
 
-                if not session_authenticated:
-                    context = await browser.new_context(**context_kwargs)
-                    page = await context.new_page()
-                    success, last_msg = await authenticate_with_credentials(page, email, password, totp_secret)
+            try:
+                session_authenticated = await authenticate_with_credentials(page, email, password, totp_secret)
+            except Exception as e:
+                print(f"❌ Login sequence failed: {e}")
+                await browser.close()
+                return False
 
-                    if not success:
-                        await browser.close()
-                        # Short-circuit logic: immediately fail if credentials are wrong.
-                        # Only retry if it was a connection/timeout error.
-                        if any(err in last_msg for err in ["PASSWORD_ERROR", "EMAIL_ERROR", "TOTP_ERROR"]):
-                            return False, last_msg
+        # 3. Sync and Save
+        if session_authenticated:
+            print("🌐 Synchronizing auth state with Microsoft Teams and Outlook concurrently...")
+            await asyncio.gather(
+                sync_teams(context),
+                sync_outlook(context)
+            )
 
-                        print(f"⚠️ Attempt {attempt} failed due to network/timeout: {last_msg}. Retrying...")
-                        continue
+            await context.storage_state(path=SESSION_FILE)
+            await browser.close()
+            print(f"💾 All sessions successfully updated and saved to {SESSION_FILE}!")
+            return True
 
-                    session_authenticated = True
-
-                if session_authenticated:
-                    print("🌐 Synchronizing auth state for Teams and Outlook...")
-                    await asyncio.gather(
-                        sync_teams(context),
-                        sync_outlook(context)
-                    )
-                    await context.storage_state(path=SESSION_FILE)
-                    await browser.close()
-                    print(f"💾 Session state saved to {SESSION_FILE}")
-                    return True, "Login Successful! Session saved."
-
-        except Exception as e:
-            last_msg = f"Crash during attempt {attempt}: {e}"
-            print(last_msg)
-            await asyncio.sleep(2)
-
-    return False, last_msg
+        await browser.close()
+        return False
 
 
 def run_daily_login(creds: dict) -> bool:
-    success, _ = asyncio.run(run_daily_login_async(creds, headless=False, force_fresh=False))
-    return success
+    return asyncio.run(run_daily_login_async(creds))

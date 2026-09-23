@@ -16,10 +16,12 @@ THEME = {
     "border_hover": "#4B4B66",
     "text_primary": "#F1F5F9",
     "text_secondary": "#94A3B8",
+    "text_muted": "#64748B",
     "accent_indigo": "#6366F1",
     "accent_hover": "#4F46E5",
     "reorder_active": "#EAB308",
-    "reorder_selected": "#FFFFFF"
+    "reorder_selected": "#FFFFFF",
+    "lock_red": "#EF4444"
 }
 
 RESOURCE_STYLES = {
@@ -30,6 +32,8 @@ RESOURCE_STYLES = {
     "zip": ("📦", "ARCHIVE", "#C084FC", "#261E33"),
     "github": ("🐙", "GITHUB", "#E2E8F0", "#22272E"),
     "chat": ("💬", "CHAT", "#4ADE80", "#182A20"),
+    "assign": ("📥", "ASSIGNMENT", "#F43F5E", "#331825"),
+    "forum": ("📢", "FORUM", "#38BDF8", "#1A2B3C"),
     "url": ("🔗", "LINK", "#60A5FA", "#1C2638"),
     "default": ("📌", "ITEM", "#94A3B8", "#222530")
 }
@@ -45,8 +49,12 @@ def parse_course_title(fullname: str):
 
 
 def detect_resource_style(item: dict):
+    mod_type = (item.get("type") or "").lower()
     title = (item.get("title") or "").lower()
     url = (item.get("fileurl") or "").lower()
+
+    if mod_type == "assign": return RESOURCE_STYLES["assign"]
+    if mod_type in ["forum", "news"]: return RESOURCE_STYLES["forum"]
     if "github.com" in url or "git" in title: return RESOURCE_STYLES["github"]
     if any(k in url or k in title for k in ["whatsapp", "telegram", "chat", "discord"]): return RESOURCE_STYLES["chat"]
     if ".pdf" in url or "pdf" in title: return RESOURCE_STYLES["pdf"]
@@ -54,30 +62,50 @@ def detect_resource_style(item: dict):
     if any(k in url or k in title for k in [".xls", ".xlsx", "excel", "spreadsheet"]): return RESOURCE_STYLES["excel"]
     if any(k in url or k in title for k in [".doc", ".docx", "word", "document"]): return RESOURCE_STYLES["word"]
     if any(k in url or k in title for k in [".zip", ".rar", ".7z", "folder", "archive"]): return RESOURCE_STYLES["zip"]
-    if url.startswith("http"): return RESOURCE_STYLES["url"]
+    if url.startswith("http") or mod_type == "url": return RESOURCE_STYLES["url"]
     return RESOURCE_STYLES["default"]
 
 
 class CollapsibleFrame(ctk.CTkFrame):
-    def __init__(self, master, title="Section", **kwargs):
-        super().__init__(master, fg_color=THEME["card_bg"], border_color=THEME["border"], border_width=1,
+    def __init__(self, master, title="Section", is_locked=False, availability_info="", **kwargs):
+        border_col = THEME["border"] if not is_locked else "#3F252B"
+        super().__init__(master, fg_color=THEME["card_bg"], border_color=border_col, border_width=1,
                          corner_radius=10, **kwargs)
         self.is_expanded = True
-        self.header_frame = ctk.CTkFrame(self, fg_color=THEME["header_bg"], corner_radius=10, cursor="hand2")
+        self.is_locked = is_locked
+
+        hdr_bg = THEME["header_bg"] if not is_locked else "#26171B"
+        self.header_frame = ctk.CTkFrame(self, fg_color=hdr_bg, corner_radius=10, cursor="hand2")
         self.header_frame.pack(fill="x", expand=True)
 
-        self.title_lbl = ctk.CTkLabel(self.header_frame, text=title, font=ctk.CTkFont(size=14, weight="bold"),
-                                      text_color=THEME["text_primary"])
+        title_text = f"🔒 {title}" if is_locked else title
+        title_color = THEME["text_primary"] if not is_locked else THEME["text_muted"]
+
+        self.title_lbl = ctk.CTkLabel(self.header_frame, text=title_text, font=ctk.CTkFont(size=14, weight="bold"),
+                                      text_color=title_color)
         self.title_lbl.pack(side="left", padx=15, pady=12)
+
+        if is_locked:
+            self.lock_badge = ctk.CTkFrame(self.header_frame, fg_color="#3B1820", corner_radius=4)
+            self.lock_badge.pack(side="left", padx=5)
+            ctk.CTkLabel(self.lock_badge, text="Restricted", font=ctk.CTkFont(size=10, weight="bold"),
+                         text_color=THEME["lock_red"]).pack(padx=6, pady=2)
 
         self.toggle_lbl = ctk.CTkLabel(self.header_frame, text="▲", font=ctk.CTkFont(size=12, weight="bold"),
                                        text_color=THEME["text_secondary"])
         self.toggle_lbl.pack(side="right", padx=15, pady=12)
 
-        for widget in (self.header_frame, self.title_lbl, self.toggle_lbl): widget.bind("<Button-1>",
-                                                                                        lambda e: self.toggle())
+        for widget in (self.header_frame, self.title_lbl, self.toggle_lbl):
+            widget.bind("<Button-1>", lambda e: self.toggle())
+
         self.content_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.content_frame.pack(fill="x", expand=True, padx=10, pady=10)
+
+        if is_locked and availability_info:
+            notice = ctk.CTkFrame(self.content_frame, fg_color="#22171B", corner_radius=6)
+            notice.pack(fill="x", padx=4, pady=(0, 8))
+            ctk.CTkLabel(notice, text=f"⚠️ {availability_info}", font=ctk.CTkFont(size=11),
+                         text_color=THEME["lock_red"], justify="left", wraplength=700).pack(padx=10, pady=8, anchor="w")
 
     def toggle(self):
         if self.is_expanded:
@@ -218,7 +246,6 @@ class EbwiseView(ctk.CTkFrame):
             self.tab_bar.configure(selected_color=THEME["reorder_active"])
             return
 
-        # Cancel previous fetch thread if active
         if self.active_cancel_event:
             self.active_cancel_event.set()
 
@@ -319,7 +346,6 @@ class EbwiseView(ctk.CTkFrame):
         border_col = THEME["reorder_selected"] if is_selected else (
             THEME["reorder_active"] if self.is_reorder_mode else THEME["border"])
 
-        # Strict uniform height=200
         card = ctk.CTkFrame(parent, fg_color=THEME["card_bg"], border_color=border_col,
                             border_width=2 if self.is_reorder_mode else 1, corner_radius=12, height=200, cursor="hand2")
         card.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
@@ -342,7 +368,6 @@ class EbwiseView(ctk.CTkFrame):
                                  text_color=THEME["text_primary"], wraplength=210, justify="left", anchor="w")
         title_lbl.pack(fill="x", expand=True, anchor="w")
 
-        # Fixed height lecturer area with "+X more" button to prevent elongation
         instructors = course.get("instructors", [{"fullname": "No lecturers found", "email": "No email provided"}])
 
         lecturer_frame = ctk.CTkFrame(content, fg_color="transparent")
@@ -385,7 +410,6 @@ class EbwiseView(ctk.CTkFrame):
             card.bind("<Leave>", lambda e: card.configure(border_color=THEME["border"]))
 
     def _show_lecturer_profile(self, instructors: list):
-        """Displays a dark-mode profile modal for the course instructors with copy buttons."""
         if self.is_reorder_mode: return
 
         modal = ctk.CTkToplevel(self)
@@ -423,7 +447,6 @@ class EbwiseView(ctk.CTkFrame):
             name = inst.get("fullname", "Unknown")
             email = inst.get("email", "No email provided")
 
-            # Name Row with Copy Button
             name_frame = ctk.CTkFrame(card, fg_color="transparent")
             name_frame.pack(pady=(0, 2))
             ctk.CTkLabel(name_frame, text=name, font=ctk.CTkFont(size=16, weight="bold"),
@@ -434,7 +457,6 @@ class EbwiseView(ctk.CTkFrame):
                 btn_copy_name.configure(command=lambda t=name, b=btn_copy_name: copy_to_clipboard(t, b))
                 btn_copy_name.pack(side="left")
 
-            # Email Row with Copy Button
             email_frame = ctk.CTkFrame(card, fg_color="transparent")
             email_frame.pack(pady=(0, 15))
             ctk.CTkLabel(email_frame, text=email, font=ctk.CTkFont(size=12), text_color=THEME["accent_indigo"]).pack(
@@ -503,7 +525,7 @@ class EbwiseView(ctk.CTkFrame):
                             card_frame = self.card_widgets[cid]["card"]
                             card_frame.grid(row=new_pos // 3, column=new_pos % 3, padx=10, pady=10, sticky="nsew")
 
-    # --- SCREEN 2: BREADCRUMBS, HERO & EXPANDABLE DETAILS ---
+    # --- SCREEN 2: DYNAMIC MOODLE SECTIONS & DETAILS ---
     def render_course_details(self, course: dict):
         for widget in self.scroll_container.winfo_children(): widget.destroy()
 
@@ -520,61 +542,105 @@ class EbwiseView(ctk.CTkFrame):
         ctk.CTkLabel(breadcrumb_frame, text=f"  /  {code}", font=ctk.CTkFont(size=13),
                      text_color=THEME["text_secondary"]).pack(side="left")
 
-        hero_card = ctk.CTkFrame(self.scroll_container, fg_color=THEME["card_bg"], border_color=THEME["border"],
-                                 border_width=1, corner_radius=12)
-        hero_card.pack(fill="x", pady=(0, 20), ipady=10)
+        hero_card = ctk.CTkFrame(self.scroll_container, fg_color="transparent",border_width=0)
+        hero_card.pack(fill="x", pady=(0, 20))
 
         hero_content = ctk.CTkFrame(hero_card, fg_color="transparent")
-        hero_content.pack(fill="x", padx=20, pady=10)
+        hero_content.pack(fill="x", padx=0, pady=0)
 
         ctk.CTkLabel(hero_content, text=title, font=ctk.CTkFont(size=20, weight="bold"),
                      text_color=THEME["text_primary"], anchor="w").pack(fill="x")
         ctk.CTkLabel(hero_content, text=f"Course Code: {code}  •  Multimedia University", font=ctk.CTkFont(size=12),
                      text_color=THEME["text_secondary"], anchor="w").pack(fill="x", pady=(4, 0))
 
-        announcements, materials = [], []
-        for item in course.get("files", []):
-            if item.get("type") in ["forum", "news"]:
-                announcements.append(item)
+        sections = course.get("sections", [])
+
+        if not sections:
+            # Fallback for flat files if sections fail
+            files = course.get("files", [])
+            sec_card = CollapsibleFrame(self.scroll_container, title="📁 Course Resources & Files")
+            sec_card.pack(fill="x", pady=8)
+            if files:
+                for f in files: self._build_item_row(sec_card.content_frame, f)
             else:
-                materials.append(item)
+                ctk.CTkLabel(sec_card.content_frame, text="No items posted yet.",
+                             text_color=THEME["text_secondary"]).pack(anchor="w", padx=10, pady=5)
+            return
 
-        ann_card = CollapsibleFrame(self.scroll_container, title="📢 Announcements & News")
-        ann_card.pack(fill="x", pady=8)
-        if announcements:
-            for ann in announcements: self._build_item_row(ann_card.content_frame, ann)
-        else:
-            ctk.CTkLabel(ann_card.content_frame, text="No announcements posted yet.",
-                         text_color=THEME["text_secondary"]).pack(anchor="w", padx=10, pady=5)
+        # Render each Moodle section dynamically
+        for sec in sections:
+            sec_name = sec.get("name") or "General"
+            sec_uservisible = sec.get("uservisible", True)
+            sec_avail_info = sec.get("availabilityinfo", "")
+            modules = sec.get("modules", [])
 
-        mat_card = CollapsibleFrame(self.scroll_container, title="📁 Course Resources & Files")
-        mat_card.pack(fill="x", pady=8)
-        if materials:
-            for mat in materials: self._build_item_row(mat_card.content_frame, mat)
-        else:
-            ctk.CTkLabel(mat_card.content_frame, text="No materials uploaded for this section.",
-                         text_color=THEME["text_secondary"]).pack(anchor="w", padx=10, pady=5)
+            # Skip empty hidden sections
+            if not sec_uservisible and not modules and not sec_avail_info:
+                continue
+
+            sec_card = CollapsibleFrame(
+                self.scroll_container,
+                title=sec_name,
+                is_locked=not sec_uservisible,
+                availability_info=sec_avail_info
+            )
+            sec_card.pack(fill="x", pady=8)
+
+            if not sec_uservisible and not modules:
+                continue
+
+            if not modules:
+                ctk.CTkLabel(sec_card.content_frame, text="No activities or resources in this section.",
+                             text_color=THEME["text_secondary"]).pack(anchor="w", padx=10, pady=5)
+            else:
+                for mod in modules:
+                    mod_uservisible = mod.get("uservisible", True)
+                    mod_availability = mod.get("availabilityinfo", "")
+
+                    for item in mod.get("contents", []):
+                        item_dict = dict(item)
+                        item_dict["uservisible"] = mod_uservisible
+                        item_dict["availabilityinfo"] = mod_availability
+                        self._build_item_row(sec_card.content_frame, item_dict)
 
     def _build_item_row(self, parent_container, item: dict):
         url = item.get("fileurl") or ""
         raw_name = item.get("title") or "Resource File"
+        is_accessible = item.get("uservisible", True)
+        avail_info = item.get("availabilityinfo", "")
+
         icon, badge_text, text_color, bg_color = detect_resource_style(item)
 
-        tile = ctk.CTkFrame(parent_container, fg_color="#181824", border_color=THEME["border"], border_width=1,
-                            corner_radius=8, cursor="hand2" if url else "arrow")
+        tile_bg = "#181824" if is_accessible else "#1A151A"
+        tile_border = THEME["border"] if is_accessible else "#382025"
+
+        tile = ctk.CTkFrame(parent_container, fg_color=tile_bg, border_color=tile_border, border_width=1,
+                            corner_radius=8, cursor="hand2" if (url and is_accessible) else "arrow")
         tile.pack(fill="x", padx=4, pady=4, ipady=4)
 
-        lbl = ctk.CTkLabel(tile, text=f"{icon}   {raw_name}", font=ctk.CTkFont(size=13, weight="bold"),
-                           text_color=THEME["text_primary"], anchor="w")
+        display_icon = icon if is_accessible else "🔒"
+        lbl_text = f"{display_icon}   {raw_name}"
+        lbl_color = THEME["text_primary"] if is_accessible else THEME["text_muted"]
+
+        lbl = ctk.CTkLabel(tile, text=lbl_text, font=ctk.CTkFont(size=13, weight="bold"),
+                           text_color=lbl_color, anchor="w")
         lbl.pack(side="left", padx=15, pady=6, fill="x", expand=True)
 
-        pill = ctk.CTkFrame(tile, fg_color=bg_color, corner_radius=4)
+        pill = ctk.CTkFrame(tile, fg_color=bg_color if is_accessible else "#331C20", corner_radius=4)
         pill.pack(side="right", padx=12, pady=6)
 
-        pill_lbl = ctk.CTkLabel(pill, text=badge_text, font=ctk.CTkFont(size=10, weight="bold"), text_color=text_color)
+        pill_text = badge_text if is_accessible else "LOCKED"
+        pill_color = text_color if is_accessible else THEME["lock_red"]
+
+        pill_lbl = ctk.CTkLabel(pill, text=pill_text, font=ctk.CTkFont(size=10, weight="bold"), text_color=pill_color)
         pill_lbl.pack(padx=8, pady=2)
 
-        if url:
+        if not is_accessible and avail_info:
+            notice_lbl = ctk.CTkLabel(tile, text=f"  ⚠️ {avail_info}", font=ctk.CTkFont(size=10),
+                                      text_color=THEME["lock_red"], anchor="w")
+            notice_lbl.pack(side="bottom", fill="x", padx=15, pady=(0, 4))
+
+        if url and is_accessible:
             action = lambda e, u=url: open_ebwise_url_authenticated(u)
             for element in (tile, lbl, pill, pill_lbl): element.bind("<Button-1>", action)
             tile.bind("<Enter>", lambda e: tile.configure(fg_color="#222232", border_color=THEME["border_hover"]))
