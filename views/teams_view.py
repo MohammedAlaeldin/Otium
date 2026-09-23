@@ -504,40 +504,69 @@ class TeamsView(ctk.CTkFrame):
             self.after(0, lambda: _render_posts(msgs))
 
         def _render_posts(msgs):
-            loading_lbl.destroy()
+            try:
+                loading_lbl.destroy()
+            except Exception:
+                pass
+
             if not msgs:
                 ctk.CTkLabel(self.channel_content_frame, text="No posts found in this channel.", text_color=THEME["text_secondary"]).pack(pady=30)
                 return
 
-            for m in reversed(msgs):
-                msg_card = ctk.CTkFrame(self.channel_content_frame, fg_color=THEME["card_bg"], border_color=THEME["border"], border_width=1, corner_radius=10)
-                msg_card.pack(fill="x", pady=5, padx=2)
-                
-                # Header Row (Sender Name + Timestamp)
-                hdr_row = ctk.CTkFrame(msg_card, fg_color="transparent")
-                hdr_row.pack(fill="x", padx=12, pady=(10, 2))
+            try:
+                for m in reversed(msgs):
+                    msg_card = ctk.CTkFrame(self.channel_content_frame, fg_color=THEME["card_bg"], border_color=THEME["border"], border_width=1, corner_radius=10)
+                    msg_card.pack(fill="x", pady=5, padx=2)
+                    
+                    # Header Row
+                    hdr_row = ctk.CTkFrame(msg_card, fg_color="transparent")
+                    hdr_row.pack(fill="x", padx=12, pady=(10, 2))
 
-                ctk.CTkLabel(hdr_row, text=m['sender'], font=ctk.CTkFont(weight="bold", size=12), text_color=THEME["accent_indigo"]).pack(side="left")
+                    ctk.CTkLabel(hdr_row, text=str(m.get('sender', 'Unknown')), font=ctk.CTkFont(weight="bold", size=12), text_color=THEME["accent_indigo"]).pack(side="left")
 
-                # Parse and format created timestamp
-                date_str = ""
-                raw_ts = m.get("created_at")
-                if raw_ts:
-                    try:
-                        clean_ts = str(raw_ts).strip().replace("Z", "+00:00")
-                        dt = datetime.fromisoformat(clean_ts)
-                        if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
-                        date_str = dt.astimezone().strftime("%b %d, %Y at %I:%M %p")
-                    except Exception:
-                        date_str = ""
+                    date_str = ""
+                    raw_ts = m.get("created_at")
+                    if raw_ts:
+                        try:
+                            clean_ts = str(raw_ts).strip().replace("Z", "+00:00")
+                            dt = datetime.fromisoformat(clean_ts)
+                            if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
+                            date_str = dt.astimezone().strftime("%b %d, %Y at %I:%M %p")
+                        except Exception:
+                            pass
 
-                if date_str:
-                    ctk.CTkLabel(hdr_row, text=f"•  {date_str}", font=ctk.CTkFont(size=11), text_color=THEME["text_secondary"]).pack(side="left", padx=(8, 0))
+                    if date_str:
+                        ctk.CTkLabel(hdr_row, text=f"•  {date_str}", font=ctk.CTkFont(size=11), text_color=THEME["text_secondary"]).pack(side="left", padx=(8, 0))
 
-                ctk.CTkLabel(msg_card, text=m['content'], font=ctk.CTkFont(size=13), text_color=THEME["text_primary"], anchor="w", justify="left", wraplength=480).pack(fill="x", padx=12, pady=(0, 10))
+                    # Body Text
+                    if m.get('content'):
+                        ctk.CTkLabel(msg_card, text=m['content'], font=ctk.CTkFont(size=13), text_color=THEME["text_primary"], anchor="w", justify="left", wraplength=480).pack(fill="x", padx=12, pady=(2, 6))
+
+                    # Attachments Button Setup
+                    attachments = m.get('attachments', [])
+                    if attachments:
+                        att_frame = ctk.CTkFrame(msg_card, fg_color="transparent")
+                        att_frame.pack(fill="x", padx=12, pady=(0, 10))
+                        
+                        for att in attachments:
+                            file_row = ctk.CTkFrame(att_frame, fg_color=THEME["header_bg"], corner_radius=6)
+                            file_row.pack(fill="x", pady=2)
+                            
+                            ctk.CTkLabel(file_row, text=f"📎 {att.get('name', 'Attachment')}", font=ctk.CTkFont(size=12), text_color=THEME["text_primary"]).pack(side="left", padx=10, pady=8)
+                            
+                            btn = ctk.CTkButton(
+                                file_row, text="Open File", width=80, height=26, font=ctk.CTkFont(size=11, weight="bold"),
+                                fg_color=THEME["accent_indigo"], hover_color=THEME["accent_hover"],
+                                command=lambda url=att['url']: open_in_browser(url)
+                            )
+                            btn.pack(side="right", padx=10, pady=8)
+                    else:
+                        ctk.CTkFrame(msg_card, fg_color="transparent", height=6).pack(fill="x")
+            except Exception as e:
+                print(f"Error rendering posts: {e}")
+                ctk.CTkLabel(self.channel_content_frame, text=f"Encountered a UI render error.", text_color=THEME["error_text"]).pack(pady=10)
 
         threading.Thread(target=_load_posts, daemon=True).start()
-
     def _show_chat_messages(self, chat):
         for child in self.chat_messages_frame.winfo_children(): child.destroy()
 
