@@ -2,70 +2,72 @@ import asyncio
 import os
 import time
 import requests
-import tempfile
 import json
 import re
 import html
 from playwright.async_api import async_playwright
-from storage import SESSION_FILE
+from cryptography.fernet import Fernet
+
+from storage import SESSION_FILE, get_app_dir, _get_or_create_master_key
+
 
 class TeamsBackend:
     def __init__(self):
-        self.skype_token = None
+        self.skype_auth = None
         self.graph_token = None
-        self.cache_file = os.path.join(tempfile.gettempdir(), "otium_teams_cache.json")
+        self.chat_svc_url = None
+        self.cache_file = os.path.join(get_app_dir(), "teams_token_cache.bin")
         self.last_errors = []
 
     def _clean_text(self, raw_text: str) -> str:
-        if not raw_text: return ""
-        # 1. Immediately drop system events
-        if "systemEventMessage" in raw_text or "ThreadActivity" in raw_text: return ""
-        
-        # 2. Format HTML
-        clean = re.sub(r'(?i)<br\s*/?>', ' ', raw_text)
-        clean = re.sub(r'(?i)</p>', ' ', clean)
-        clean = re.sub(r'(?i)</div>', ' ', clean)
-        clean = re.sub(r'<[^<]+?>', '', clean)
+        if not raw_text:
+            return ""
+        clean = re.sub(r'<[^>]+?>', '', raw_text)
         clean = html.unescape(clean)
-        clean = re.sub(r'\s+', ' ', clean).strip()
+        clean = clean.replace('\xa0', ' ').strip()
         
-        # 3. Drop dict-mashed gibberish
-        if len(clean) > 60 and clean.count(' ') < 2: return ""
-        if "flightproxy.teams" in clean: return ""
-        if "callStarted" in clean or "falsefalse" in clean: return ""
-        
+        if clean.startswith("8:orgid:") or clean.startswith("8:0:") or (len(clean) > 30 and " " not in clean and ":" in clean):
+            return ""
         return clean
 
     def _load_cached_tokens(self):
         try:
             if os.path.exists(self.cache_file):
-                with open(self.cache_file, "r") as f:
-                    data = json.load(f)
-                    if data.get("expires_at", 0) > time.time() + 300:
-                        self.skype_token = data.get("skype_token")
-                        self.graph_token = data.get("graph_token")
-                        return bool(self.skype_token and self.graph_token)
+                fernet = Fernet(_get_or_create_master_key())
+                with open(self.cache_file, "rb") as f:
+                    data = json.loads(fernet.decrypt(f.read()).decode("utf-8"))
+                if data.get("expires_at", 0) > time.time() + 300:
+                    self.skype_auth = data.get("skype_auth")
+                    self.graph_token = data.get("graph_token")
+                    self.chat_svc_url = data.get("chat_svc_url")
+                    return bool(self.skype_auth and self.chat_svc_url and self.graph_token)
         except Exception:
             pass
         return False
 
     def _save_cached_tokens(self):
         try:
-            with open(self.cache_file, "w") as f:
-                json.dump({
-                    "skype_token": self.skype_token,
-                    "graph_token": self.graph_token,
-                    "expires_at": time.time() + 3600
-                }, f)
+            fernet = Fernet(_get_or_create_master_key())
+            payload = json.dumps({
+                "skype_auth": self.skype_auth,
+                "graph_token": self.graph_token,
+                "chat_svc_url": self.chat_svc_url,
+                "expires_at": time.time() + 3600
+            }).encode("utf-8")
+            with open(self.cache_file, "wb") as f:
+                f.write(fernet.encrypt(payload))
         except Exception:
             pass
 
     def _clear_cache(self):
-        self.skype_token = None
+        self.skype_auth = None
         self.graph_token = None
+        self.chat_svc_url = None
         if os.path.exists(self.cache_file):
-            try: os.remove(self.cache_file)
-            except Exception: pass
+            try:
+                os.remove(self.cache_file)
+            except Exception:
+                pass
 
     async def _get_tokens_silently(self):
         if not os.path.exists(SESSION_FILE):
@@ -74,7 +76,8 @@ class TeamsBackend:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--disable-blink-features=AutomationControlled"]
+                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
+                      "--disable-blink-features=AutomationControlled"]
             )
             context = await browser.new_context(
                 storage_state=SESSION_FILE,
@@ -82,70 +85,94 @@ class TeamsBackend:
             )
             page = await context.new_page()
 
-            skype_future = asyncio.Future()
-            graph_future = asyncio.Future()
-
-            async def handle_request(request):
-                try:
-                    auth = request.headers.get("authorization", "") or request.headers.get("x-ms-skypetoken", "")
-                    if auth:
-                        token = auth.replace("skypetoken=", "")
-                        if not token.startswith("Bearer"): token = f"Bearer {token}"
-
-                        if "api.spaces.skype.com" in request.url or "teams.microsoft.com/api" in request.url or "chatsvcagg" in request.url:
-                            if not skype_future.done(): skype_future.set_result(token)
-                        elif "graph.microsoft.com" in request.url or "outlook.office.com" in request.url:
-                            if not graph_future.done(): graph_future.set_result(token)
-                except Exception:
-                    pass
-
-            page.on("request", handle_request)
-
             try:
                 await page.goto("https://teams.microsoft.com/v2/", wait_until="domcontentloaded", timeout=60000)
-                await page.wait_for_timeout(10000)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=15000)
+                except Exception:
+                    pass
+                await page.wait_for_timeout(2000)
 
-                js_script = """
+                tokens_js = """
                 () => {
-                    let tokens = { skype: null, graph: null };
-                    function checkToken(val) {
+                    function decode(raw) {
                         try {
-                            if (typeof val !== 'string') return;
-                            let secret = val;
-                            if (val.startsWith('{')) {
-                                let parsed = JSON.parse(val);
-                                secret = parsed.secret || parsed.accessToken || val;
+                            let secret = raw;
+                            if (typeof raw === 'string' && raw.startsWith('{')) {
+                                const parsed = JSON.parse(raw);
+                                secret = parsed.secret || parsed.accessToken || raw;
                             }
-                            if (typeof secret === 'string' && secret.startsWith('eyJ')) {
-                                let parts = secret.split('.');
-                                if (parts.length === 3) {
-                                    let base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-                                    let pad = base64.length % 4;
-                                    if (pad) { base64 += new Array(5 - pad).join('='); }
-                                    let payload = JSON.parse(atob(base64));
-                                    if (payload.aud) {
-                                        if (payload.aud.includes("skype.com") || payload.aud.includes("teams.microsoft.com")) { tokens.skype = secret; }
-                                        if (payload.aud.includes("graph.microsoft.com")) { tokens.graph = secret; }
-                                    }
-                                }
-                            }
-                        } catch(e) {}
+                            if (typeof secret !== 'string' || !secret.startsWith('eyJ')) return null;
+                            const parts = secret.split('.');
+                            if (parts.length !== 3) return null;
+                            let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+                            const pad = b64.length % 4;
+                            if (pad) b64 += '='.repeat(4 - pad);
+                            const payload = JSON.parse(atob(b64));
+                            return { secret, aud: payload.aud || '' };
+                        } catch (e) { return null; }
                     }
-                    for (let i = 0; i < localStorage.length; i++) { checkToken(localStorage.getItem(localStorage.key(i))); }
-                    for (let i = 0; i < sessionStorage.length; i++) { checkToken(sessionStorage.getItem(sessionStorage.key(i))); }
-                    return tokens;
+
+                    let graphToken = null;
+                    let spacesToken = null;
+                    for (const store of [localStorage, sessionStorage]) {
+                        for (let i = 0; i < store.length; i++) {
+                            const decoded = decode(store.getItem(store.key(i)));
+                            if (!decoded) continue;
+                            if (!graphToken && decoded.aud.includes('graph.microsoft.com')) {
+                                graphToken = decoded.secret;
+                            }
+                            if (!spacesToken && decoded.aud.includes('api.spaces.skype.com')) {
+                                spacesToken = decoded.secret;
+                            }
+                        }
+                    }
+                    return { graphToken, spacesToken };
                 }
                 """
-                extracted = await page.evaluate(js_script)
+                found = await page.evaluate(tokens_js)
+                graph_token_raw = found.get("graphToken")
+                spaces_token_raw = found.get("spacesToken")
 
-                if extracted.get('skype'): self.skype_token = f"Bearer {extracted['skype']}"
-                if extracted.get('graph'): self.graph_token = f"Bearer {extracted['graph']}"
+                if graph_token_raw:
+                    self.graph_token = f"Bearer {graph_token_raw}"
+                else:
+                    self.last_errors.append("Failed to extract Graph token.")
 
-                try:
-                    if not self.skype_token: self.skype_token = await asyncio.wait_for(skype_future, timeout=20.0)
-                    if not self.graph_token: self.graph_token = await asyncio.wait_for(graph_future, timeout=20.0)
-                except asyncio.TimeoutError:
-                    pass
+                if spaces_token_raw:
+                    authz_js = """
+                    async (bearer) => {
+                        try {
+                            const res = await fetch('https://teams.microsoft.com/api/authsvc/v1.0/authz', {
+                                method: 'POST',
+                                headers: { 'Authorization': 'Bearer ' + bearer },
+                            });
+                            if (!res.ok) return { error: 'HTTP ' + res.status };
+                            return await res.json();
+                        } catch (e) {
+                            return { error: String(e) };
+                        }
+                    }
+                    """
+                    authz_result = await page.evaluate(authz_js, spaces_token_raw)
+
+                    if authz_result and not authz_result.get("error"):
+                        skype_token = (authz_result.get("tokens") or {}).get("skypeToken")
+                        chat_service_base = (authz_result.get("regionGtms") or {}).get("chatService")
+                        if skype_token:
+                            self.skype_auth = skype_token
+                        if chat_service_base:
+                            self.chat_svc_url = chat_service_base.rstrip("/") + "/v1/users/ME/conversations"
+                        if not (skype_token and chat_service_base):
+                            self.last_errors.append("authsvc/authz response missing tokens/chatService.")
+                    else:
+                        err = authz_result.get("error") if authz_result else "no response"
+                        self.last_errors.append(f"authsvc/authz call failed: {err}")
+                else:
+                    self.last_errors.append("No Spaces/Skype-resource AAD token found in Teams' token cache.")
+
+                print(f"🔑 [DEBUG] Graph token: {bool(self.graph_token)} | "
+                      f"Skype token: {bool(self.skype_auth)} | Chat URL: {bool(self.chat_svc_url)}")
 
                 self._save_cached_tokens()
             finally:
@@ -154,15 +181,29 @@ class TeamsBackend:
     def _ensure_auth(self, force_refresh=False):
         if force_refresh:
             self._clear_cache()
-        if not self.skype_token or not self.graph_token:
-            if not force_refresh and self._load_cached_tokens(): return
+
+        if not self.skype_auth or not self.graph_token or not self.chat_svc_url:
+            if not force_refresh and self._load_cached_tokens():
+                return
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
                 loop.run_until_complete(self._get_tokens_silently())
-                loop.close()
             except Exception as e:
+                print(f"❌ [DEBUG] Auth Capture Error: {e}")
                 self.last_errors.append(f"Auth Capture Error: {str(e)}")
+            finally:
+                loop.close()
+
+    def _get_skype_headers(self):
+        if not self.skype_auth: return {}
+        auth_val = self.skype_auth.replace("Bearer ", "").replace("skypetoken=", "")
+        return {
+            "Authentication": f"skypetoken={auth_val}",
+            "x-skypetoken": auth_val,
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+        }
 
     def fetch_dashboard_data(self, is_retry=False) -> dict:
         self.last_errors = []
@@ -178,101 +219,78 @@ class TeamsBackend:
             headers = {"Authorization": self.graph_token, "Accept": "application/json"}
             try:
                 res = requests.get("https://graph.microsoft.com/v1.0/me/joinedTeams", headers=headers, timeout=30)
-                if res.status_code == 401: needs_retry = True
+                if res.status_code == 401:
+                    needs_retry = True
                 elif res.status_code == 200:
                     for team in res.json().get("value", []):
-                        chan_res = requests.get(f"https://graph.microsoft.com/v1.0/teams/{team['id']}/channels", headers=headers, timeout=20)
+                        chan_res = requests.get(f"https://graph.microsoft.com/v1.0/teams/{team['id']}/channels",
+                                                headers=headers, timeout=20)
                         chans = chan_res.json().get("value", []) if chan_res.status_code == 200 else []
                         teams_data.append({"id": team["id"], "displayName": team["displayName"], "channels": chans})
+                else:
+                    self.last_errors.append(f"Teams API Error {res.status_code}")
             except Exception as e:
                 self.last_errors.append(f"Teams Exception: {str(e)}")
 
-        # 2. Fetch Chats (Graph with strictly authorized Skype Fallback)
-        if self.graph_token:
-            headers = {"Authorization": self.graph_token, "Accept": "application/json"}
-            chat_url = "https://graph.microsoft.com/beta/me/chats?$expand=lastMessagePreview&$top=20"
+        # 2. Fetch Chats
+        if self.chat_svc_url and self.skype_auth:
             try:
-                res = requests.get(chat_url, headers=headers, timeout=15)
-                if res.status_code == 401: needs_retry = True
+                res = requests.get(self.chat_svc_url, headers=self._get_skype_headers(), timeout=15)
+                if res.status_code in [401, 403]:
+                    needs_retry = True
                 elif res.status_code == 200:
-                    for chat in res.json().get("value", []):
-                        topic = chat.get("topic")
-                        chat_type = chat.get("chatType", "")
-                        title = topic if topic else ("1-on-1 Chat" if chat_type == "oneOnOne" else "Group Chat")
-                        preview = chat.get("lastMessagePreview", {})
-                        content = preview.get("body", {}).get("content", "")
-                        clean_text = self._clean_text(content)
-                        if not clean_text: continue
-                        
-                        sender = preview.get("from", {}).get("user", {}).get("displayName", "Unknown") if preview.get("from") else "Unknown"
-                        chats.append({"id": chat.get("id"), "title": title, "sender": sender, "last_message": clean_text[:120]})
-                
-                # THE FALLBACK: Uses strict x-skypetoken headers
-                elif res.status_code in [403, 401] and self.skype_token:
-                    raw_skype = self.skype_token.replace("Bearer ", "").strip()
-                    csa_headers = {
-                        "Authentication": f"skypetoken={raw_skype}",
-                        "x-skypetoken": raw_skype,
-                        "Accept": "application/json"
-                    }
-                    csa_url = "https://teams.microsoft.com/api/chatsvcagg/v1/users/ME/conversations?$top=20"
-                    csa_res = requests.get(csa_url, headers=csa_headers, timeout=15)
-                    
-                    if csa_res.status_code == 200:
-                        for conv in csa_res.json().get("conversations", []):
-                            cid = conv.get("id")
-                            props = conv.get("threadProperties", {})
-                            topic = props.get("topic")
-                            
-                            title = topic if topic else "Chat"
-                            if not topic:
-                                members = conv.get("members", [])
-                                names = [m.get("displayName") for m in members if m.get("displayName")]
-                                if names: title = ", ".join(names[:2])
+                    data = res.json()
+                    for conv in data.get("conversations", [])[:20]:
+                        thread_id = conv.get("id", "")
 
-                            preview = conv.get("lastMessagePreview", {})
-                            content = preview.get("content", "")
-                            
-                            clean_text = self._clean_text(content)
-                            if not clean_text: continue 
-                            
-                            sender = preview.get("imDisplayName") or "Unknown"
+                        title = conv.get("properties", {}).get("topic", "")
+                        if not title:
+                            title = "Chat" if "19:" in thread_id else "1-on-1 Chat"
 
-                            chats.append({
-                                "id": cid, 
-                                "title": title, 
-                                "sender": sender, 
-                                "last_message": clean_text[:120]
-                            })
-                    else:
-                        self.last_errors.append(f"Skype CSA Fallback Error: {csa_res.status_code}")
+                        last_msg = conv.get("lastMessage", {})
+                        content = last_msg.get("content", "")
+                        clean_text = self._clean_text(content) if content else "No recent messages..."
+
+                        sender = last_msg.get("imdisplayname", "Unknown")
+
+                        chats.append({
+                            "id": thread_id,
+                            "title": title,
+                            "sender": sender,
+                            "last_message": clean_text[:120] if clean_text else "No recent messages..."
+                        })
+                else:
+                    self.last_errors.append(f"Internal Chat Error {res.status_code}")
             except Exception as e:
                 self.last_errors.append(f"Chat Exception: {str(e)}")
+        else:
+            self.last_errors.append("Missing Internal Chat URL/Token for Chats.")
 
-        # 3. Fetch Calls 
+        # 3. Fetch Calls
         if self.graph_token:
             headers = {"Authorization": self.graph_token, "Accept": "application/json"}
             call_url = "https://graph.microsoft.com/v1.0/me/events?$select=subject,start,end,isOnlineMeeting,onlineMeeting,onlineMeetingUrl&$top=25"
             try:
                 res = requests.get(call_url, headers=headers, timeout=15)
-                if res.status_code == 401: needs_retry = True
+                if res.status_code == 401:
+                    needs_retry = True
                 elif res.status_code == 200:
                     for ev in res.json().get("value", []):
                         if ev.get("isOnlineMeeting"):
                             join_url = ev.get("onlineMeetingUrl", "")
                             if not join_url and isinstance(ev.get("onlineMeeting"), dict):
                                 join_url = ev["onlineMeeting"].get("joinUrl", "")
-                            
+
                             calls.append({
                                 "subject": ev.get("subject", "Call / Online Meeting"),
                                 "start_time": ev.get("start", {}).get("dateTime", ""),
                                 "join_url": join_url
                             })
-            except Exception:
-                pass
+            except Exception as e:
+                self.last_errors.append(f"Calls Exception: {str(e)}")
 
         if needs_retry and not is_retry:
-            print("⚠️ Token Expired (401). Retrying once...")
+            print("⚠️ Token Expired (401/403). Retrying once...")
             return self.fetch_dashboard_data(is_retry=True)
 
         return {
@@ -280,64 +298,74 @@ class TeamsBackend:
             "chats": chats,
             "calls": calls,
             "errors": self.last_errors,
-            "debug": {"has_graph": bool(self.graph_token), "has_skype": bool(self.skype_token)}
+            "debug": {"has_graph": bool(self.graph_token), "has_skype": bool(self.skype_auth)}
         }
 
     def fetch_chat_history(self, chat_id: str) -> list:
-        if not self.graph_token: return []
-        headers = {"Authorization": self.graph_token, "Accept": "application/json"}
-        url = f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}/messages?$top=20"
+        if not self.chat_svc_url or not self.skype_auth: return []
 
+        url = f"{self.chat_svc_url}/{chat_id}/messages?pageSize=30"
         try:
-            res = requests.get(url, headers=headers, timeout=15)
+            res = requests.get(url, headers=self._get_skype_headers(), timeout=15)
             if res.status_code == 200:
                 msgs = []
-                for msg in res.json().get("value", []):
-                    content = msg.get("body", {}).get("content", "")
+                for msg in res.json().get("messages", []):
+                    msg_type = msg.get("messagetype", "")
+                    if msg_type in ["Control/Status", "Control/ClearHistory", "Event/Call", "ThreadActivity/AddMember", "ThreadActivity/DeleteMember"]:
+                        continue
+
+                    content = msg.get("content", "")
                     clean_text = self._clean_text(content)
-                    if not clean_text: continue
-                    sender = msg.get("from", {}).get("user", {}).get("displayName", "Unknown") if msg.get("from") else "Unknown"
-                    msgs.append({"sender": sender, "content": clean_text})
+
+                    sender = msg.get("imdisplayname") or "User"
+
+                    if clean_text:
+                        msgs.append({"sender": sender, "content": clean_text})
                 return msgs
-                
-            elif res.status_code in [403, 401] and self.skype_token:
-                raw_skype = self.skype_token.replace("Bearer ", "").strip()
-                csa_headers = {"Authentication": f"skypetoken={raw_skype}", "x-skypetoken": raw_skype, "Accept": "application/json"}
-                csa_url = f"https://teams.microsoft.com/api/chatsvcagg/v1/users/ME/conversations/{chat_id}/messages?$top=20"
-                csa_res = requests.get(csa_url, headers=csa_headers, timeout=15)
-                
-                if csa_res.status_code == 200:
-                    msgs = []
-                    for msg in csa_res.json().get("messages", []):
-                        content = msg.get("content", "")
-                        clean = self._clean_text(content)
-                        if not clean or msg.get("messageType") != "Message": continue
-                        sender = msg.get("imDisplayName") or "Unknown"
-                        msgs.append({"sender": sender, "content": clean})
-                    return msgs
-        except Exception:
-            pass
+            else:
+                print(f"❌ [CONSOLE ERROR] Fetch Chat History Failed ({res.status_code}): {res.text}")
+        except Exception as e:
+            print(f"❌ [CONSOLE EXCEPTION] Fetch Chat History Exception: {e}")
         return []
 
     def fetch_channel_messages(self, team_id: str, channel_id: str) -> list:
+        """Fetches channel posts including creation timestamps."""
         if not self.graph_token: return []
         headers = {"Authorization": self.graph_token, "Accept": "application/json"}
         try:
-            res = requests.get(f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{channel_id}/messages?$top=20", headers=headers, timeout=30)
+            res = requests.get(
+                f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{channel_id}/messages?$top=20",
+                headers=headers, timeout=30)
             if res.status_code == 200:
                 msgs = []
                 for msg in res.json().get("value", []):
                     content = msg.get("body", {}).get("content", "")
                     clean_text = self._clean_text(content)
-                    if not clean_text: continue
-                    sender = msg.get("from", {}).get("user", {}).get("displayName", "Unknown") if msg.get("from") else "Unknown"
-                    msgs.append({"sender": sender, "content": clean_text})
+
+                    sender = "Unknown"
+                    if msg.get("from") and msg.get("from").get("user"):
+                        sender = msg.get("from").get("user").get("displayName", "Unknown")
+
+                    created_at = msg.get("createdDateTime", "")
+
+                    if clean_text:
+                        msgs.append({
+                            "sender": sender,
+                            "content": clean_text,
+                            "created_at": created_at
+                        })
                 return msgs
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Channel Msg Fetch Error: {e}")
         return []
 
+
+# --- Global Instance & Top-Level Exports ---
 _teams_backend_instance = TeamsBackend()
+
 def fetch_dashboard_data() -> dict: return _teams_backend_instance.fetch_dashboard_data()
+
 def fetch_chat_history(chat_id: str) -> list: return _teams_backend_instance.fetch_chat_history(chat_id)
-def fetch_channel_messages(team_id: str, channel_id: str) -> list: return _teams_backend_instance.fetch_channel_messages(team_id, channel_id)
+
+def fetch_channel_messages(team_id: str, channel_id: str) -> list: 
+    return _teams_backend_instance.fetch_channel_messages(team_id, channel_id)
