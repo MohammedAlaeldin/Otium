@@ -80,7 +80,7 @@ class AppController(ctk.CTk):
             if success:
                 self.after(0, self.show_dashboard)
             else:
-                self.after(0, self.show_login)
+                self.after(0, self.show_network_error)
 
         threading.Thread(target=bg_auth, daemon=True).start()
 
@@ -102,6 +102,56 @@ class AppController(ctk.CTk):
         spinner = ctk.CTkProgressBar(self.current_frame, mode="indeterminate", width=220)
         spinner.place(relx=0.5, rely=0.53, anchor="center")
         spinner.start()
+
+    def show_network_error(self):
+        """Displays an error screen with a retry button if the background auto-login fails 3 times."""
+        if self.current_frame is not None:
+            self.current_frame.destroy()
+
+        self.current_frame = ctk.CTkFrame(self)
+        self.current_frame.pack(fill="both", expand=True)
+
+        lbl = ctk.CTkLabel(
+            self.current_frame,
+            text="⚠️ No Internet Connection",
+            font=ctk.CTkFont(size=24, weight="bold"),
+            text_color="#F87171"
+        )
+        lbl.place(relx=0.5, rely=0.4, anchor="center")
+
+        sub_lbl = ctk.CTkLabel(
+            self.current_frame,
+            text="We couldn't reach the servers after 3 attempts.\nPlease check your connection or manually log in.",
+            font=ctk.CTkFont(size=14),
+            text_color="#94A3B8",
+            justify="center"
+        )
+        sub_lbl.place(relx=0.5, rely=0.48, anchor="center")
+
+        btn_frame = ctk.CTkFrame(self.current_frame, fg_color="transparent")
+        btn_frame.place(relx=0.5, rely=0.6, anchor="center")
+
+        retry_btn = ctk.CTkButton(
+            btn_frame,
+            text="🔄 Retry",
+            width=120,
+            height=32,
+            font=ctk.CTkFont(weight="bold"),
+            command=self.check_initial_auth_state
+        )
+        retry_btn.pack(side="left", padx=10)
+
+        login_btn = ctk.CTkButton(
+            btn_frame,
+            text="Back to Login",
+            width=120,
+            height=32,
+            fg_color="transparent",
+            border_width=1,
+            hover_color="#333333",
+            command=self.show_login
+        )
+        login_btn.pack(side="left", padx=10)
 
     def show_login(self):
         """Presents the Login Screen."""

@@ -10,7 +10,6 @@ KEY_ACCOUNT = "MasterEncryptionKey"
 
 
 def get_app_dir():
-
     app_dir = os.path.join(os.path.expanduser("~"), ".otium_app")
     os.makedirs(app_dir, exist_ok=True)
     return app_dir
@@ -19,6 +18,7 @@ def get_app_dir():
 # --- Explicit File Paths ---
 CREDENTIALS_FILE = os.path.join(get_app_dir(), "credentials.bin")
 SESSION_FILE = os.path.join(get_app_dir(), "storage_state.json")
+PREFERENCES_FILE = os.path.join(get_app_dir(), "preferences.json")
 PLAYWRIGHT_USER_DATA_DIR = os.path.join(get_app_dir(), "user_data")
 
 
@@ -51,47 +51,56 @@ def load_credentials():
         return None
 
 
+# --- USER PREFERENCES (Tab Order & Course Order) ---
+def load_preferences() -> dict:
+    default_prefs = {
+        "tab_order": ["In Progress", "Past", "Future", "All"],
+        "course_orders": {}  # e.g., {"In Progress": ["CSP1123", "CMT1134"]}
+    }
+    if not os.path.exists(PREFERENCES_FILE):
+        return default_prefs
+    try:
+        with open(PREFERENCES_FILE, "r") as f:
+            data = json.load(f)
+            # Guarantee default tab keys exist
+            if "tab_order" not in data:
+                data["tab_order"] = default_prefs["tab_order"]
+            if "course_orders" not in data:
+                data["course_orders"] = {}
+            return data
+    except Exception:
+        return default_prefs
+
+
+def save_preferences(prefs: dict):
+    try:
+        with open(PREFERENCES_FILE, "w") as f:
+            json.dump(prefs, f, indent=2)
+            print("💾 Preferences saved to preferences.json")
+    except Exception as e:
+        print(f"⚠️ Failed to save preferences: {e}")
+
+
 def clear_all_saved_data():
-    """Completely deletes saved sessions, encrypted credentials, keyring entries, and browser caches."""
+    """Completely deletes saved sessions, encrypted credentials, preferences, keyring entries, and browser caches."""
 
-    # 1. Delete encrypted credentials
-    if os.path.exists(CREDENTIALS_FILE):
-        try:
-            os.remove(CREDENTIALS_FILE)
-            print("🗑️ Removed credentials.bin")
-        except Exception as e:
-            print(f"⚠️ Failed to delete {CREDENTIALS_FILE}: {e}")
+    for file_path in [CREDENTIALS_FILE, SESSION_FILE, PREFERENCES_FILE]:
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                print(f"🗑️ Removed {os.path.basename(file_path)}")
+            except Exception as e:
+                print(f"⚠️ Failed to delete {file_path}: {e}")
 
-    # 2. Delete Master Key from OS Keyring
     try:
         keyring.delete_password(SERVICE_NAME, KEY_ACCOUNT)
         print("🗑️ Removed keyring encryption password")
     except Exception as e:
         print(f"⚠️ Keyring entry not found or already deleted: {e}")
 
-    # 3. Delete session state file
-    if os.path.exists(SESSION_FILE):
-        try:
-            os.remove(SESSION_FILE)
-            print("🗑️ Removed storage_state.json")
-        except Exception as e:
-            print(f"⚠️ Failed to delete {SESSION_FILE}: {e}")
-
-    # 4. Remove persistent browser user data folder
     if os.path.exists(PLAYWRIGHT_USER_DATA_DIR):
         try:
             shutil.rmtree(PLAYWRIGHT_USER_DATA_DIR)
             print("🗑️ Removed user_data directory")
         except Exception as e:
             print(f"⚠️ Failed to remove browser data dir: {e}")
-
-    # 5. Clear extra local files in root or app directory
-    extra_files = ["session.json", "tokens.json", "cookies.json", "storage_state.json"]
-    for file in extra_files:
-        for path in [file, os.path.join(get_app_dir(), file)]:
-            if os.path.exists(path):
-                try:
-                    os.remove(path)
-                    print(f"🗑️ Removed {path}")
-                except Exception as e:
-                    print(f"⚠️ Failed to delete {path}: {e}")
