@@ -7,9 +7,7 @@ import json
 import re
 import html
 from playwright.async_api import async_playwright
-
 from storage import SESSION_FILE
-
 
 class TeamsBackend:
     def __init__(self):
@@ -19,11 +17,24 @@ class TeamsBackend:
         self.last_errors = []
 
     def _clean_text(self, raw_text: str) -> str:
-        if not raw_text:
-            return ""
-        clean = re.sub(r'<[^<]+?>', '', raw_text)
+        if not raw_text: return ""
+        # 1. Immediately drop system events
+        if "systemEventMessage" in raw_text or "ThreadActivity" in raw_text: return ""
+        
+        # 2. Format HTML
+        clean = re.sub(r'(?i)<br\s*/?>', ' ', raw_text)
+        clean = re.sub(r'(?i)</p>', ' ', clean)
+        clean = re.sub(r'(?i)</div>', ' ', clean)
+        clean = re.sub(r'<[^<]+?>', '', clean)
         clean = html.unescape(clean)
-        return clean.replace('\xa0', ' ').strip()
+        clean = re.sub(r'\s+', ' ', clean).strip()
+        
+        # 3. Drop dict-mashed gibberish
+        if len(clean) > 60 and clean.count(' ') < 2: return ""
+        if "flightproxy.teams" in clean: return ""
+        if "callStarted" in clean or "falsefalse" in clean: return ""
+        
+        return clean
 
     def _load_cached_tokens(self):
         try:
@@ -53,10 +64,8 @@ class TeamsBackend:
         self.skype_token = None
         self.graph_token = None
         if os.path.exists(self.cache_file):
-            try:
-                os.remove(self.cache_file)
-            except Exception:
-                pass
+            try: os.remove(self.cache_file)
+            except Exception: pass
 
     async def _get_tokens_silently(self):
         if not os.path.exists(SESSION_FILE):
@@ -65,8 +74,7 @@ class TeamsBackend:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-                      "--disable-blink-features=AutomationControlled"]
+                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--disable-blink-features=AutomationControlled"]
             )
             context = await browser.new_context(
                 storage_state=SESSION_FILE,
@@ -82,8 +90,7 @@ class TeamsBackend:
                     auth = request.headers.get("authorization", "") or request.headers.get("x-ms-skypetoken", "")
                     if auth:
                         token = auth.replace("skypetoken=", "")
-                        if not token.startswith("Bearer"):
-                            token = f"Bearer {token}"
+                        if not token.startswith("Bearer"): token = f"Bearer {token}"
 
                         if "api.spaces.skype.com" in request.url or "teams.microsoft.com/api" in request.url or "chatsvcagg" in request.url:
                             if not skype_future.done(): skype_future.set_result(token)
@@ -116,7 +123,6 @@ class TeamsBackend:
                                     let pad = base64.length % 4;
                                     if (pad) { base64 += new Array(5 - pad).join('='); }
                                     let payload = JSON.parse(atob(base64));
-
                                     if (payload.aud) {
                                         if (payload.aud.includes("skype.com") || payload.aud.includes("teams.microsoft.com")) { tokens.skype = secret; }
                                         if (payload.aud.includes("graph.microsoft.com")) { tokens.graph = secret; }
@@ -139,10 +145,7 @@ class TeamsBackend:
                     if not self.skype_token: self.skype_token = await asyncio.wait_for(skype_future, timeout=20.0)
                     if not self.graph_token: self.graph_token = await asyncio.wait_for(graph_future, timeout=20.0)
                 except asyncio.TimeoutError:
-                    print("⚠️ [DEBUG] Network Interceptor Timeout for tokens.")
-
-                if not self.skype_token and not self.graph_token:
-                    raise Exception("Failed to capture any valid MSAL tokens from Teams session.")
+                    pass
 
                 self._save_cached_tokens()
             finally:
@@ -151,17 +154,14 @@ class TeamsBackend:
     def _ensure_auth(self, force_refresh=False):
         if force_refresh:
             self._clear_cache()
-
         if not self.skype_token or not self.graph_token:
-            if not force_refresh and self._load_cached_tokens():
-                return
+            if not force_refresh and self._load_cached_tokens(): return
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 loop.run_until_complete(self._get_tokens_silently())
                 loop.close()
             except Exception as e:
-                print(f"❌ [DEBUG] Auth Capture Error: {e}")
                 self.last_errors.append(f"Auth Capture Error: {str(e)}")
 
     def fetch_dashboard_data(self, is_retry=False) -> dict:
@@ -173,80 +173,103 @@ class TeamsBackend:
         calls = []
         needs_retry = False
 
-        # 1. Fetch Teams (Graph API)
+        # 1. Fetch Teams
         if self.graph_token:
             headers = {"Authorization": self.graph_token, "Accept": "application/json"}
             try:
                 res = requests.get("https://graph.microsoft.com/v1.0/me/joinedTeams", headers=headers, timeout=30)
-                if res.status_code == 401:
-                    needs_retry = True
+                if res.status_code == 401: needs_retry = True
                 elif res.status_code == 200:
                     for team in res.json().get("value", []):
-                        chan_res = requests.get(f"https://graph.microsoft.com/v1.0/teams/{team['id']}/channels",
-                                                headers=headers, timeout=20)
+                        chan_res = requests.get(f"https://graph.microsoft.com/v1.0/teams/{team['id']}/channels", headers=headers, timeout=20)
                         chans = chan_res.json().get("value", []) if chan_res.status_code == 200 else []
                         teams_data.append({"id": team["id"], "displayName": team["displayName"], "channels": chans})
-                else:
-                    print(f"❌ [CONSOLE ERROR] Teams Graph API failed with status {res.status_code}: {res.text}")
-                    self.last_errors.append(f"Teams API Error {res.status_code}")
             except Exception as e:
-                print(f"❌ [CONSOLE EXCEPTION] Teams Request Exception: {e}")
                 self.last_errors.append(f"Teams Exception: {str(e)}")
 
-        # 2. Fetch Chats using Graph API (Beta endpoint handles chat list cleanly)
+        # 2. Fetch Chats (Graph with strictly authorized Skype Fallback)
         if self.graph_token:
             headers = {"Authorization": self.graph_token, "Accept": "application/json"}
             chat_url = "https://graph.microsoft.com/beta/me/chats?$expand=lastMessagePreview&$top=20"
             try:
                 res = requests.get(chat_url, headers=headers, timeout=15)
-                print(f"🔍 [CONSOLE DEBUG] Graph Chat API Response Status: {res.status_code}")
-
-                if res.status_code == 401:
-                    needs_retry = True
+                if res.status_code == 401: needs_retry = True
                 elif res.status_code == 200:
-                    data = res.json()
-                    for chat in data.get("value", []):
+                    for chat in res.json().get("value", []):
                         topic = chat.get("topic")
                         chat_type = chat.get("chatType", "")
-
                         title = topic if topic else ("1-on-1 Chat" if chat_type == "oneOnOne" else "Group Chat")
-
                         preview = chat.get("lastMessagePreview", {})
                         content = preview.get("body", {}).get("content", "")
-                        clean_text = self._clean_text(content) if content else "No recent messages..."
+                        clean_text = self._clean_text(content)
+                        if not clean_text: continue
+                        
+                        sender = preview.get("from", {}).get("user", {}).get("displayName", "Unknown") if preview.get("from") else "Unknown"
+                        chats.append({"id": chat.get("id"), "title": title, "sender": sender, "last_message": clean_text[:120]})
+                
+                # THE FALLBACK: Uses strict x-skypetoken headers
+                elif res.status_code in [403, 401] and self.skype_token:
+                    raw_skype = self.skype_token.replace("Bearer ", "").strip()
+                    csa_headers = {
+                        "Authentication": f"skypetoken={raw_skype}",
+                        "x-skypetoken": raw_skype,
+                        "Accept": "application/json"
+                    }
+                    csa_url = "https://teams.microsoft.com/api/chatsvcagg/v1/users/ME/conversations?$top=20"
+                    csa_res = requests.get(csa_url, headers=csa_headers, timeout=15)
+                    
+                    if csa_res.status_code == 200:
+                        for conv in csa_res.json().get("conversations", []):
+                            cid = conv.get("id")
+                            props = conv.get("threadProperties", {})
+                            topic = props.get("topic")
+                            
+                            title = topic if topic else "Chat"
+                            if not topic:
+                                members = conv.get("members", [])
+                                names = [m.get("displayName") for m in members if m.get("displayName")]
+                                if names: title = ", ".join(names[:2])
 
-                        sender = "Unknown"
-                        if preview.get("from") and preview.get("from").get("user"):
-                            sender = preview.get("from").get("user").get("displayName", "Unknown")
+                            preview = conv.get("lastMessagePreview", {})
+                            content = preview.get("content", "")
+                            
+                            clean_text = self._clean_text(content)
+                            if not clean_text: continue 
+                            
+                            sender = preview.get("imDisplayName") or "Unknown"
 
-                        chats.append(
-                            {"id": chat.get("id"), "title": title, "sender": sender, "last_message": clean_text[:120]})
-                else:
-                    # PRINT FULL ERROR TO CONSOLE SO YOU CAN READ IT CLEARLY
-                    print(
-                        f"❌ [CONSOLE ERROR] Graph Chat API Failed:\nURL: {chat_url}\nStatus: {res.status_code}\nResponse: {res.text}")
-                    self.last_errors.append(f"Graph Chat Error {res.status_code} (Check Console)")
+                            chats.append({
+                                "id": cid, 
+                                "title": title, 
+                                "sender": sender, 
+                                "last_message": clean_text[:120]
+                            })
+                    else:
+                        self.last_errors.append(f"Skype CSA Fallback Error: {csa_res.status_code}")
             except Exception as e:
-                print(f"❌ [CONSOLE EXCEPTION] Graph Chat Request Exception: {e}")
                 self.last_errors.append(f"Chat Exception: {str(e)}")
-        else:
-            self.last_errors.append("Missing Graph Token for Chats.")
 
-        # 3. Fetch Calls (Graph API)
+        # 3. Fetch Calls 
         if self.graph_token:
             headers = {"Authorization": self.graph_token, "Accept": "application/json"}
-            call_url = "https://graph.microsoft.com/v1.0/me/events?$select=subject,start,end,isOnlineMeeting&$top=25"
+            call_url = "https://graph.microsoft.com/v1.0/me/events?$select=subject,start,end,isOnlineMeeting,onlineMeeting,onlineMeetingUrl&$top=25"
             try:
                 res = requests.get(call_url, headers=headers, timeout=15)
-                if res.status_code == 401:
-                    needs_retry = True
+                if res.status_code == 401: needs_retry = True
                 elif res.status_code == 200:
                     for ev in res.json().get("value", []):
                         if ev.get("isOnlineMeeting"):
-                            calls.append({"subject": ev.get("subject", "Call / Online Meeting"),
-                                          "start_time": ev.get("start", {}).get("dateTime", "")})
-            except Exception as e:
-                print(f"❌ [CONSOLE EXCEPTION] Calls Exception: {e}")
+                            join_url = ev.get("onlineMeetingUrl", "")
+                            if not join_url and isinstance(ev.get("onlineMeeting"), dict):
+                                join_url = ev["onlineMeeting"].get("joinUrl", "")
+                            
+                            calls.append({
+                                "subject": ev.get("subject", "Call / Online Meeting"),
+                                "start_time": ev.get("start", {}).get("dateTime", ""),
+                                "join_url": join_url
+                            })
+            except Exception:
+                pass
 
         if needs_retry and not is_retry:
             print("⚠️ Token Expired (401). Retrying once...")
@@ -261,10 +284,8 @@ class TeamsBackend:
         }
 
     def fetch_chat_history(self, chat_id: str) -> list:
-        """Fetches messages inside a specific Chat using Graph API."""
         if not self.graph_token: return []
         headers = {"Authorization": self.graph_token, "Accept": "application/json"}
-
         url = f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}/messages?$top=20"
 
         try:
@@ -274,53 +295,49 @@ class TeamsBackend:
                 for msg in res.json().get("value", []):
                     content = msg.get("body", {}).get("content", "")
                     clean_text = self._clean_text(content)
-
-                    sender = "Unknown"
-                    if msg.get("from") and msg.get("from").get("user"):
-                        sender = msg.get("from").get("user").get("displayName", "Unknown")
-
-                    if clean_text: msgs.append({"sender": sender, "content": clean_text})
+                    if not clean_text: continue
+                    sender = msg.get("from", {}).get("user", {}).get("displayName", "Unknown") if msg.get("from") else "Unknown"
+                    msgs.append({"sender": sender, "content": clean_text})
                 return msgs
-            else:
-                print(f"❌ [CONSOLE ERROR] Fetch Chat History Failed ({res.status_code}): {res.text}")
-        except Exception as e:
-            print(f"❌ [CONSOLE EXCEPTION] Fetch Chat History Exception: {e}")
+                
+            elif res.status_code in [403, 401] and self.skype_token:
+                raw_skype = self.skype_token.replace("Bearer ", "").strip()
+                csa_headers = {"Authentication": f"skypetoken={raw_skype}", "x-skypetoken": raw_skype, "Accept": "application/json"}
+                csa_url = f"https://teams.microsoft.com/api/chatsvcagg/v1/users/ME/conversations/{chat_id}/messages?$top=20"
+                csa_res = requests.get(csa_url, headers=csa_headers, timeout=15)
+                
+                if csa_res.status_code == 200:
+                    msgs = []
+                    for msg in csa_res.json().get("messages", []):
+                        content = msg.get("content", "")
+                        clean = self._clean_text(content)
+                        if not clean or msg.get("messageType") != "Message": continue
+                        sender = msg.get("imDisplayName") or "Unknown"
+                        msgs.append({"sender": sender, "content": clean})
+                    return msgs
+        except Exception:
+            pass
         return []
 
     def fetch_channel_messages(self, team_id: str, channel_id: str) -> list:
         if not self.graph_token: return []
         headers = {"Authorization": self.graph_token, "Accept": "application/json"}
         try:
-            res = requests.get(
-                f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{channel_id}/messages?$top=20",
-                headers=headers, timeout=30)
+            res = requests.get(f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{channel_id}/messages?$top=20", headers=headers, timeout=30)
             if res.status_code == 200:
                 msgs = []
                 for msg in res.json().get("value", []):
                     content = msg.get("body", {}).get("content", "")
                     clean_text = self._clean_text(content)
-
-                    sender = "Unknown"
-                    if msg.get("from") and msg.get("from").get("user"):
-                        sender = msg.get("from").get("user").get("displayName", "Unknown")
-
-                    if clean_text: msgs.append({"sender": sender, "content": clean_text})
+                    if not clean_text: continue
+                    sender = msg.get("from", {}).get("user", {}).get("displayName", "Unknown") if msg.get("from") else "Unknown"
+                    msgs.append({"sender": sender, "content": clean_text})
                 return msgs
-        except Exception as e:
-            print(f"Channel Msg Fetch Error: {e}")
+        except Exception:
+            pass
         return []
 
-
-# --- Global Instance & Top-Level Exports ---
 _teams_backend_instance = TeamsBackend()
-
-
 def fetch_dashboard_data() -> dict: return _teams_backend_instance.fetch_dashboard_data()
-
-
 def fetch_chat_history(chat_id: str) -> list: return _teams_backend_instance.fetch_chat_history(chat_id)
-
-
-def fetch_channel_messages(team_id: str,
-                           channel_id: str) -> list: return _teams_backend_instance.fetch_channel_messages(team_id,
-                                                                                                           channel_id)
+def fetch_channel_messages(team_id: str, channel_id: str) -> list: return _teams_backend_instance.fetch_channel_messages(team_id, channel_id)

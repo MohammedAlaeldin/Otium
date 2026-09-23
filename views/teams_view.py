@@ -1,7 +1,38 @@
 import threading
 import customtkinter as ctk
+from datetime import datetime, timedelta, timezone
 import teams_backend
+from storage import SESSION_FILE
 
+def _launch_playwright_teams(url: str):
+    """Spawns an authenticated browser instance using saved session cookies to bypass desktop prompts."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=False, args=["--start-maximized"])
+            
+            context = browser.new_context(
+                storage_state=SESSION_FILE,
+                no_viewport=True
+            )
+            page = context.new_page()
+            
+            # Force Microsoft Teams to use the web client instead of launching the native app
+            target_url = url.strip()
+            if "web=1" not in target_url:
+                target_url += ("&" if "?" in target_url else "?") + "web=1"
+            target_url += "&suppressPrompt=true"
+            
+            page.goto(target_url)
+            page.wait_for_event("close", timeout=0)
+    except Exception as e:
+        print(f"Playwright Teams launch error: {e}")
+        import webbrowser
+        webbrowser.open(url)
+
+def open_in_browser(url: str):
+    if not url: return
+    threading.Thread(target=_launch_playwright_teams, args=(url,), daemon=True).start()
 
 class TeamsView(ctk.CTkFrame):
     def __init__(self, parent):
@@ -58,8 +89,7 @@ class TeamsView(ctk.CTkFrame):
         self.calls_list_frame.grid(row=0, column=0, sticky="nsew", pady=5)
 
     def load_data(self):
-        for frame in [self.teams_list_frame, self.chat_list_frame, self.calls_list_frame, self.channel_content_frame,
-                      self.chat_messages_frame]:
+        for frame in [self.teams_list_frame, self.chat_list_frame, self.calls_list_frame, self.channel_content_frame, self.chat_messages_frame]:
             for child in frame.winfo_children(): child.destroy()
 
         ctk.CTkLabel(self.teams_list_frame, text="Syncing...").pack(pady=20)
@@ -84,13 +114,10 @@ class TeamsView(ctk.CTkFrame):
         ctk.CTkLabel(card, text=status, text_color="#FFB3B3").pack(pady=5)
 
         for err in errors:
-            ctk.CTkLabel(card, text=f"• {err}", justify="left", wraplength=350, text_color="#FFA3A3").pack(anchor="w",
-                                                                                                           padx=15,
-                                                                                                           pady=2)
+            ctk.CTkLabel(card, text=f"• {err}", justify="left", wraplength=350, text_color="#FFA3A3").pack(anchor="w", padx=15, pady=2)
 
     def _render_ui(self, data: dict):
-        for frame in [self.teams_list_frame, self.chat_list_frame, self.calls_list_frame, self.channel_content_frame,
-                      self.chat_messages_frame]:
+        for frame in [self.teams_list_frame, self.chat_list_frame, self.calls_list_frame, self.channel_content_frame, self.chat_messages_frame]:
             for child in frame.winfo_children(): child.destroy()
 
         errors = data.get("errors", [])
@@ -111,7 +138,6 @@ class TeamsView(ctk.CTkFrame):
                     btn = ctk.CTkButton(
                         self.teams_list_frame, text=f"# {channel.get('displayName', 'General')}",
                         fg_color="transparent", text_color="#E0E0E0", anchor="w", hover_color="#333333",
-                        # We pass BOTH team and channel objects so we have their IDs to fetch content
                         command=lambda t=team, c=channel: self._show_channel_content(t, c)
                     )
                     btn.pack(fill="x", padx=10, pady=1)
@@ -136,6 +162,8 @@ class TeamsView(ctk.CTkFrame):
 
         # 3. --- Render Calls ---
         calls = data.get("calls", [])
+        now_utc = datetime.now(timezone.utc)
+        
         if not calls:
             if errors:
                 self._render_error_diagnostics(self.calls_list_frame, errors, debug_info)
@@ -145,10 +173,33 @@ class TeamsView(ctk.CTkFrame):
             for call in calls:
                 card = ctk.CTkFrame(self.calls_list_frame, fg_color="#2B2B2B", corner_radius=6)
                 card.pack(fill="x", pady=4, padx=10, ipady=8)
+                
                 title = call.get('subject', 'Call / Meeting')
-                time_str = call.get('start_time', '')[:16].replace('T', ' ')
-                ctk.CTkLabel(card, text=f"📞  {title}   |   {time_str}", font=ctk.CTkFont(size=14), anchor="w").pack(
-                    side="left", padx=15, fill="x", expand=True)
+                
+                start_dt_utc = datetime.min.replace(tzinfo=timezone.utc)
+                ts = call.get('start_time')
+                if ts:
+                    try:
+                        clean_str = str(ts).strip().replace("Z", "+00:00")
+                        dt = datetime.fromisoformat(clean_str)
+                        if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
+                        start_dt_utc = dt.astimezone(timezone.utc)
+                    except Exception:
+                        pass
+                        
+                local_time_str = start_dt_utc.astimezone().strftime("%b %d, %I:%M %p") if start_dt_utc.year > 1 else "Unknown"
+                
+                info_label = ctk.CTkLabel(card, text=f"📞  {title}   |   {local_time_str}", font=ctk.CTkFont(size=14), anchor="w")
+                info_label.pack(side="left", padx=15, fill="x", expand=True)
+
+                join_url = call.get('join_url')
+                if join_url:
+                    if start_dt_utc > now_utc or now_utc <= start_dt_utc + timedelta(minutes=150):
+                        join_btn = ctk.CTkButton(
+                            card, text="Join", width=70, fg_color="#1f6aa5", hover_color="#144870",
+                            command=lambda url=join_url: open_in_browser(url)
+                        )
+                        join_btn.pack(side="right", padx=15)
 
         ctk.CTkLabel(self.channel_content_frame, text="Select a channel to view posts", text_color="gray").pack(pady=40)
         ctk.CTkLabel(self.chat_messages_frame, text="Select a chat to view messages", text_color="gray").pack(pady=40)
@@ -162,8 +213,7 @@ class TeamsView(ctk.CTkFrame):
 
         btn_frame = ctk.CTkFrame(self.channel_content_frame, fg_color="transparent")
         btn_frame.pack(fill="x", padx=10, pady=(0, 20))
-        ctk.CTkButton(btn_frame, text="📝 Announcements / Posts", width=160, fg_color="#464EB8").pack(side="left",
-                                                                                                     padx=(0, 10))
+        ctk.CTkButton(btn_frame, text="📝 Announcements / Posts", width=160, fg_color="#464EB8").pack(side="left", padx=(0, 10))
         ctk.CTkButton(btn_frame, text="📁 Files (Soon)", width=120, fg_color="#333333").pack(side="left")
 
         loading_lbl = ctk.CTkLabel(self.channel_content_frame, text="Loading channel posts...")
@@ -180,15 +230,13 @@ class TeamsView(ctk.CTkFrame):
         def _render_posts(msgs):
             loading_lbl.destroy()
             if not msgs:
-                ctk.CTkLabel(self.channel_content_frame, text="No posts found in this channel.",
-                             text_color="gray").pack(pady=20)
+                ctk.CTkLabel(self.channel_content_frame, text="No posts found in this channel.", text_color="gray").pack(pady=20)
                 return
 
             for m in reversed(msgs):
                 msg_card = ctk.CTkFrame(self.channel_content_frame, fg_color="#1E1E1E", corner_radius=6)
                 msg_card.pack(fill="x", pady=4, padx=10)
-                ctk.CTkLabel(msg_card, text=m['sender'], font=ctk.CTkFont(weight="bold", size=12), anchor="w").pack(
-                    fill="x", padx=12, pady=(8, 0))
+                ctk.CTkLabel(msg_card, text=m['sender'], font=ctk.CTkFont(weight="bold", size=12), anchor="w").pack(fill="x", padx=12, pady=(8, 0))
                 ctk.CTkLabel(msg_card, text=m['content'], font=ctk.CTkFont(size=13), text_color="#CCCCCC", anchor="w",
                              justify="left", wraplength=450).pack(fill="x", padx=12, pady=(0, 8))
 
@@ -215,14 +263,12 @@ class TeamsView(ctk.CTkFrame):
             loading_lbl.destroy()
 
             if not msgs:
-                msgs = [
-                    {"sender": chat.get("sender", "Unknown"), "content": chat.get("last_message", "No content found.")}]
+                msgs = [{"sender": chat.get("sender", "Unknown"), "content": chat.get("last_message", "No content found.")}]
 
             for m in reversed(msgs):
                 msg_card = ctk.CTkFrame(self.chat_messages_frame, fg_color="#1E1E1E", corner_radius=6)
                 msg_card.pack(fill="x", pady=4, padx=10)
-                ctk.CTkLabel(msg_card, text=m['sender'], font=ctk.CTkFont(weight="bold", size=12), anchor="w").pack(
-                    fill="x", padx=12, pady=(8, 0))
+                ctk.CTkLabel(msg_card, text=m['sender'], font=ctk.CTkFont(weight="bold", size=12), anchor="w").pack(fill="x", padx=12, pady=(8, 0))
                 ctk.CTkLabel(msg_card, text=m['content'], font=ctk.CTkFont(size=13), text_color="#CCCCCC", anchor="w",
                              justify="left", wraplength=450).pack(fill="x", padx=12, pady=(0, 8))
 
