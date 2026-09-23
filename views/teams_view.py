@@ -514,7 +514,7 @@ class TeamsView(ctk.CTkFrame):
                 return
 
             try:
-                for m in reversed(msgs):
+                for m in (msgs):
                     msg_card = ctk.CTkFrame(self.channel_content_frame, fg_color=THEME["card_bg"], border_color=THEME["border"], border_width=1, corner_radius=10)
                     msg_card.pack(fill="x", pady=5, padx=2)
                     
