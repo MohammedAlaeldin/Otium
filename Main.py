@@ -5,11 +5,26 @@ import requests
 import customtkinter as ctk
 
 from storage import SESSION_FILE
-
 import storage
 from auto_login import run_daily_login
 from dashboard import DashboardWindow
 from login_frontend import OtiumLoginApp
+
+# =============================================================
+# Quick patch for CustomTkinter destroy bug on shutdown
+# This prevents the "AttributeError: '_font'" crash when closing
+# =============================================================
+from customtkinter.windows.widgets.ctk_button import CTkButton
+_original_destroy = CTkButton.destroy
+
+def _safe_destroy(self):
+    try:
+        _original_destroy(self)
+    except AttributeError as e:
+        if "_font" not in str(e):
+            raise
+CTkButton.destroy = _safe_destroy
+# =============================================================
 
 ctk.set_appearance_mode("Dark")
 
