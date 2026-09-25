@@ -6,7 +6,6 @@ from playwright.sync_api import sync_playwright
 
 from storage import SESSION_FILE
 
-
 def is_valid_base32(key: str) -> bool:
     clean_key = key.replace(" ", "").strip()
     if len(clean_key) not in (16, 32):
@@ -18,7 +17,6 @@ def is_valid_base32(key: str) -> bool:
     except Exception:
         return False
 
-
 def validate_credentials_format(email: str, password: str, secret_key: str):
     clean_secret = secret_key.replace(" ", "").strip()
     if not email.lower().endswith(".mmu.edu.my"):
@@ -28,7 +26,6 @@ def validate_credentials_format(email: str, password: str, secret_key: str):
     if not password:
         return False, "Password cannot be empty"
     return True, "Format valid"
-
 
 def handle_security_interrupts(page):
     """Bypasses Microsoft passkey prompts or 'Skip for now' screens."""
@@ -48,7 +45,6 @@ def handle_security_interrupts(page):
                 time.sleep(1)
         except Exception:
             pass
-
 
 def _try_check_persist_checkbox(page):
     """Targets the 'Don't ask again for 1 day' / persistence checkbox safely."""
@@ -81,7 +77,6 @@ def _try_check_persist_checkbox(page):
 
     return False
 
-
 def sync_additional_services(context):
     print("🌐 Synchronizing auth state for Teams and Outlook...")
 
@@ -102,7 +97,6 @@ def sync_additional_services(context):
         print("✅ Outlook session primed.")
     except Exception as e:
         print(f"⚠️ Outlook sync skipped/timed out: {e}")
-
 
 def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: str):
     clean_secret = totp_secret.replace(" ", "").strip()
@@ -129,55 +123,34 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
         page = context.new_page()
 
         try:
-            # 1. NAVIGATION & SSO REDIRECT
-            page.goto("https://ebwise.mmu.edu.my/login/index.php", wait_until="domcontentloaded")
+            # 1. NAVIGATION
+            page.goto("https://ebwise.mmu.edu.my/login/index.php", wait_until="networkidle")
 
-            if "microsoftonline.com" not in page.url:
-                login_btn = (
-                    page.locator('a[title="Microsoft 365"]')
-                    .or_(page.locator('text="Microsoft 365"'))
-                    .or_(page.locator('text="OpenID Connect"'))
-                )
-                login_btn.first.click(timeout=8000)
-
-                # Pause execution until Microsoft URL loads
-                print("⏳ Waiting for redirect to Microsoft Login...")
-                page.wait_for_url(lambda url: "microsoftonline.com" in url, timeout=15000)
-
-            time.sleep(1)
+            login_btn = page.get_by_role("link", name="Microsoft 365").or_(
+                        page.get_by_role("button", name="OpenID Connect")).or_(
+                        page.locator('a:has-text("Log in")'))
+            login_btn.first.click(timeout=8000)
+            time.sleep(1.5)
 
             # Check for remembered account tile
             try:
-                account_tile = page.locator(f'div[data-test-id="{user_email}"], text="{user_email}"').first
+                account_tile = page.get_by_text(user_email).first
                 if account_tile.is_visible(timeout=2000):
-                    print("👤 Clicking remembered account tile...")
                     account_tile.click()
                     time.sleep(1.5)
             except Exception:
                 pass
 
-            # Dynamic Polling: Wait for Email OR Password field
-            email_input = page.locator('input[type="email"], input[name="loginfmt"]').first
-            password_input = page.locator('input[type="password"], input[name="passwd"]').first
+            # State check: Is email input visible and NOT password input?
+            email_input = page.get_by_placeholder("Email, phone, or Skype").or_(page.locator('input[type="email"]:visible')).first
+            password_input = page.get_by_placeholder("Password").or_(page.locator('input[type="password"]:visible')).first
 
-            for _ in range(15):
-                if email_input.is_visible():
-                    print("📧 Filling email field...")
-                    email_input.fill(user_email)
-                    time.sleep(0.5)
-                    page.locator('input[type="submit"], input[id="idSIButton9"]').first.click()
-                    time.sleep(2)
-                    break
-                elif password_input.is_visible():
-                    print("⏩ Email step skipped (Password field already visible).")
-                    break
-                time.sleep(1)
+            if email_input.is_visible(timeout=2000) and not password_input.is_visible(timeout=500):
+                email_input.fill(user_email)
+                page.get_by_role("button", name="Next").click()
+                time.sleep(2)
 
-            email_error = (
-                page.locator("#usernameError")
-                .or_(page.locator("text='Enter a valid email address'"))
-                .or_(page.locator("text=\"That Microsoft account doesn't exist\""))
-            )
+            email_error = page.locator("#usernameError").or_(page.get_by_text("Enter a valid email address")).or_(page.get_by_text("That Microsoft account doesn't exist"))
             if email_error.is_visible():
                 browser.close()
                 return False, "EMAIL_ERROR: Microsoft rejected this email address."
@@ -185,19 +158,17 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
             handle_security_interrupts(page)
 
             # 2. PASSWORD
-            password_input = page.locator('input[type="password"]:visible, input[name="passwd"]:visible').first
             try:
                 password_input.wait_for(state="visible", timeout=10000)
             except Exception:
                 browser.close()
                 return False, "EMAIL_ERROR: Password field not visible."
 
-            print("🔑 Filling password field...")
             password_input.fill(user_password)
-            page.locator('input[type="submit"], input[id="idSIButton9"]').first.click()
-            time.sleep(2.5)
+            page.get_by_role("button", name="Sign in").click()
+            time.sleep(2)
 
-            pwd_error = page.locator("#passwordError").or_(page.locator("text='Your account or password is incorrect'"))
+            pwd_error = page.locator("#passwordError").or_(page.get_by_text("Your account or password is incorrect"))
             if pwd_error.is_visible():
                 browser.close()
                 return False, "PASSWORD_ERROR: Incorrect password."
@@ -206,17 +177,17 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
 
             # 3. 2FA HANDSHAKE
             time.sleep(1)
-            for selector in [
-                'text="I can\'t use my Microsoft Authenticator app right now"',
-                'text="Use a verification code"',
-                'text=/verification code/i'
+            for text_sel in [
+                "I can't use my Microsoft Authenticator app right now",
+                "Use a verification code",
+                "verification code"
             ]:
-                loc = page.locator(selector).first
+                loc = page.get_by_role("button", name=text_sel).or_(page.get_by_text(text_sel)).first
                 if loc.is_visible():
                     loc.click()
                     time.sleep(1)
 
-            otc_input = page.locator('input[name="otc"]:visible').first
+            otc_input = page.get_by_placeholder("Code").or_(page.locator('input[name="otc"]:visible')).first
             try:
                 otc_input.wait_for(state="visible", timeout=10000)
             except Exception:
@@ -234,14 +205,10 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
             otc_input.fill(current_code)
             _try_check_persist_checkbox(page)
 
-            page.locator('input[type="submit"], input[id="idSIButton9"]').first.click()
+            page.get_by_role("button", name="Verify").click()
             time.sleep(2)
 
-            totp_error = (
-                page.locator('text="That code didn\'t work"')
-                .or_(page.locator('text="More information required"'))
-                .or_(page.locator('#otcError'))
-            )
+            totp_error = page.get_by_text("That code didn't work").or_(page.get_by_text("More information required")).or_(page.locator('#otcError'))
             if totp_error.is_visible():
                 browser.close()
                 return False, "TOTP_ERROR: Microsoft rejected the code."
@@ -249,7 +216,7 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
             handle_security_interrupts(page)
 
             # 5. "STAY SIGNED IN?"
-            stay_signed_in_btn = page.locator('input[id="idSIButton9"]').or_(page.locator('input[value="Yes"]')).first
+            stay_signed_in_btn = page.get_by_role("button", name="Yes").or_(page.locator('input[id="idSIButton9"]')).first
             try:
                 if stay_signed_in_btn.is_visible(timeout=4000):
                     _try_check_persist_checkbox(page)
@@ -272,7 +239,6 @@ def attempt_full_ebwise_login(user_email: str, user_password: str, totp_secret: 
             browser.close()
             return False, f"LOGIN_FAILED: {str(e)}"
 
-
 def generate_current_totp(secret_key: str):
     try:
         clean_secret = secret_key.replace(" ", "").strip()
@@ -282,7 +248,6 @@ def generate_current_totp(secret_key: str):
         return code, time_left
     except Exception:
         return "------", 0
-
 
 def open_authenticated_service(target_url: str):
     if not os.path.exists(SESSION_FILE):
