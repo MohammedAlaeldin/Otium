@@ -26,7 +26,7 @@ class TeamsBackend:
         clean = html.unescape(clean)
         clean = clean.replace('\xa0', ' ').strip()
         
-        if clean.startswith("8:orgid:") or clean.startswith("8:0:") or (len(clean) > 30 and " " not in clean and ":" in clean):
+        if clean.startswith("8:orgid:") or clean.startswith("8:0:"):
             return ""
         return clean
 
@@ -171,9 +171,6 @@ class TeamsBackend:
                 else:
                     self.last_errors.append("No Spaces/Skype-resource AAD token found in Teams' token cache.")
 
-                print(f"🔑 [DEBUG] Graph token: {bool(self.graph_token)} | "
-                      f"Skype token: {bool(self.skype_auth)} | Chat URL: {bool(self.chat_svc_url)}")
-
                 self._save_cached_tokens()
             finally:
                 await browser.close()
@@ -190,7 +187,6 @@ class TeamsBackend:
             try:
                 loop.run_until_complete(self._get_tokens_silently())
             except Exception as e:
-                print(f"❌ [DEBUG] Auth Capture Error: {e}")
                 self.last_errors.append(f"Auth Capture Error: {str(e)}")
             finally:
                 loop.close()
@@ -214,7 +210,6 @@ class TeamsBackend:
         calls = []
         needs_retry = False
 
-        # 1. Fetch Teams
         if self.graph_token:
             headers = {"Authorization": self.graph_token, "Accept": "application/json"}
             try:
@@ -232,7 +227,6 @@ class TeamsBackend:
             except Exception as e:
                 self.last_errors.append(f"Teams Exception: {str(e)}")
 
-        # 2. Fetch Chats
         if self.chat_svc_url and self.skype_auth:
             try:
                 res = requests.get(self.chat_svc_url, headers=self._get_skype_headers(), timeout=15)
@@ -245,12 +239,21 @@ class TeamsBackend:
 
                         title = conv.get("properties", {}).get("topic", "")
                         if not title:
-                            title = "Chat" if "19:" in thread_id else "1-on-1 Chat"
-
+                            title = conv.get("threadProperties", {}).get("topic", "")
+                        
                         last_msg = conv.get("lastMessage", {})
-                        content = last_msg.get("content", "")
-                        clean_text = self._clean_text(content) if content else "No recent messages..."
+                        
+                        if not title:
+                            title = last_msg.get("imdisplayname", "")
+                            if not title:
+                                title = "Group Chat" if "19:" in thread_id else "1-on-1 Chat"
 
+                        content = last_msg.get("content", "")
+                        
+                        if content.strip().startswith("{") and ('"eventtime"' in content or '"initiator"' in content):
+                            content = "System event or call log..."
+
+                        clean_text = self._clean_text(content) if content else "No recent messages..."
                         sender = last_msg.get("imdisplayname", "Unknown")
 
                         chats.append({
@@ -266,7 +269,6 @@ class TeamsBackend:
         else:
             self.last_errors.append("Missing Internal Chat URL/Token for Chats.")
 
-        # 3. Fetch Calls
         if self.graph_token:
             headers = {"Authorization": self.graph_token, "Accept": "application/json"}
             call_url = "https://graph.microsoft.com/v1.0/me/events?$select=subject,start,end,isOnlineMeeting,onlineMeeting,onlineMeetingUrl&$top=25"
@@ -311,12 +313,16 @@ class TeamsBackend:
                 msgs = []
                 for msg in res.json().get("messages", []):
                     msg_type = msg.get("messagetype", "")
-                    if msg_type in ["Control/Status", "Control/ClearHistory", "Event/Call", "ThreadActivity/AddMember", "ThreadActivity/DeleteMember"]:
+                    
+                    if msg_type.startswith("Event/") or msg_type.startswith("ThreadActivity/") or msg_type.startswith("Control/"):
                         continue
 
                     content = msg.get("content", "")
-                    clean_text = self._clean_text(content)
+                    
+                    if content.strip().startswith("{") and ('"eventtime"' in content or '"initiator"' in content or '"members"' in content):
+                        continue
 
+                    clean_text = self._clean_text(content)
                     sender = msg.get("imdisplayname") or "User"
 
                     if clean_text:
@@ -329,34 +335,66 @@ class TeamsBackend:
         return []
 
     def fetch_channel_messages(self, team_id: str, channel_id: str) -> list:
-        """Fetches channel posts including creation timestamps."""
+        """Fetches channel posts, extracting creation timestamps and aggressively parsing attachments."""
+        self._ensure_auth()
         if not self.graph_token: return []
+        
         headers = {"Authorization": self.graph_token, "Accept": "application/json"}
         try:
+            # Increased $top from 20 to 40 to ensure older announcements with files aren't missed
             res = requests.get(
-                f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{channel_id}/messages?$top=20",
+                f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{channel_id}/messages?$top=40",
                 headers=headers, timeout=30)
+            
             if res.status_code == 200:
                 msgs = []
                 for msg in res.json().get("value", []):
-                    content = msg.get("body", {}).get("content", "")
-                    clean_text = self._clean_text(content)
+                    raw_content = msg.get("body", {}).get("content", "")
+                    clean_text = self._clean_text(raw_content)
+                    
+                    if not clean_text:
+                        clean_text = msg.get("summary", "")
+                    if not clean_text:
+                        clean_text = msg.get("subject", "")
+
+                    # Broadened attachment extraction logic
+                    attachments = []
+                    for att in (msg.get("attachments") or []):
+                        name = att.get("name")
+                        # Some Graph API attachments use webUrl instead of contentUrl
+                        url = att.get("contentUrl") or att.get("webUrl")
+                        
+                        # Ignore inline base64 images, but keep valid links even if the name is blank
+                        if url and not url.startswith("data:"):
+                            attachments.append({
+                                "name": name if name else "Attached File", 
+                                "url": url
+                            })
+
+                    # Ignore ghost messages that have neither text nor valid files
+                    if not clean_text and not attachments:
+                        continue
 
                     sender = "Unknown"
-                    if msg.get("from") and msg.get("from").get("user"):
-                        sender = msg.get("from").get("user").get("displayName", "Unknown")
+                    from_obj = msg.get("from", {})
+                    if isinstance(from_obj, dict):
+                        user_data = from_obj.get("user") or from_obj.get("application") or from_obj.get("device") or {}
+                        if isinstance(user_data, dict):
+                            sender = user_data.get("displayName", "Unknown")
 
                     created_at = msg.get("createdDateTime", "")
 
-                    if clean_text:
-                        msgs.append({
-                            "sender": sender,
-                            "content": clean_text,
-                            "created_at": created_at
-                        })
+                    msgs.append({
+                        "sender": sender,
+                        "content": clean_text,
+                        "attachments": attachments,
+                        "created_at": created_at
+                    })
                 return msgs
+            else:
+                print(f"Channel Msg Fetch Error: HTTP {res.status_code}")
         except Exception as e:
-            print(f"Channel Msg Fetch Error: {e}")
+            print(f"Channel Msg Fetch Exception: {e}")
         return []
 
 
