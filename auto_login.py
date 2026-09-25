@@ -84,7 +84,7 @@ async def _try_check_persist_checkbox(page):
 
 
 async def authenticate_with_credentials(page, email: str, password: str, totp_secret: str) -> bool:
-    """State-driven Microsoft 2FA login flow."""
+    """State-driven Microsoft 2FA login flow using robust ARIA Locators."""
     totp = pyotp.TOTP(totp_secret)
 
     print("🌐 Navigating to eBwise login page...")
@@ -94,13 +94,12 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
     if "microsoftonline.com" not in page.url:
         print("🔄 Clicking Microsoft 365 SSO button...")
         try:
-            # Target Moodle SSO buttons securely
-            sso_btn = page.locator('a[title="Microsoft 365"], text="Microsoft 365", text="OpenID Connect"').first
-            await sso_btn.wait_for(state="visible", timeout=5000)
-            await sso_btn.click()
+            # Accessibility locator: target the actual link name rather than CSS
+            sso_btn = page.get_by_role("link", name="Microsoft 365").or_(
+                page.get_by_role("button", name="OpenID Connect"))
+            await sso_btn.first.click(timeout=8000)
 
             print("⏳ Waiting for redirect to Microsoft Login...")
-            # We explicitly halt execution until the URL changes to Microsoft
             await page.wait_for_url(lambda url: "microsoftonline.com" in url, timeout=15000)
         except Exception as e:
             print(f"⚠️ Warning during SSO redirect: {e}")
@@ -114,7 +113,7 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
 
     # 2. Check for Account Picker Tile (e.g. remembered email)
     try:
-        account_tile = page.locator(f'div[data-test-id="{email}"], text="{email}"').first
+        account_tile = page.get_by_text(email).first
         if await account_tile.is_visible(timeout=3000):
             print("👤 Clicking remembered account tile...")
             await account_tile.click()
@@ -124,14 +123,14 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
 
     # 3. Dynamic Field Polling (Wait for either Email OR Password to appear)
     print("🔍 Identifying current Microsoft login step...")
-    email_field = page.locator('input[type="email"], input[name="loginfmt"]').first
-    password_field = page.locator('input[type="password"], input[name="passwd"]').first
+    email_field = page.get_by_placeholder("Email, phone, or Skype").or_(page.locator('input[type="email"]')).first
+    password_field = page.get_by_placeholder("Password").or_(page.locator('input[type="password"]')).first
 
     for _ in range(15):  # Poll for up to 15 seconds
         if await email_field.is_visible():
             print("📧 Filling email field...")
             await email_field.fill(email)
-            await page.click('input[type="submit"], input[id="idSIButton9"]')
+            await page.get_by_role("button", name="Next").click()
             await asyncio.sleep(2)
             break
         elif await password_field.is_visible():
@@ -147,7 +146,7 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
         await password_field.wait_for(state="visible", timeout=8000)
         print("🔑 Filling password field...")
         await password_field.fill(password)
-        await page.click('input[type="submit"], input[id="idSIButton9"]')
+        await page.get_by_role("button", name="Sign in").click()
         await asyncio.sleep(2.5)
     except Exception:
         if "ebwise.mmu.edu.my" in page.url and "login" not in page.url:
@@ -160,12 +159,11 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
     # 5. 2FA Option Selection
     print("🛡️ Processing 2FA...")
     for text_sel in [
-        'text="I can\'t use my Microsoft Authenticator app right now"',
-        'text="Use a verification code"',
-        'text=/verification code/i'
+        "I can't use my Microsoft Authenticator app right now",
+        "Use a verification code"
     ]:
         try:
-            opt = page.locator(text_sel).first
+            opt = page.get_by_role("button", name=text_sel).or_(page.get_by_text(text_sel)).first
             if await opt.is_visible(timeout=2000):
                 print(f"🖱️ Clicking 2FA alternative: {text_sel}")
                 await opt.click()
@@ -173,7 +171,7 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
         except Exception:
             pass
 
-    otc_input = page.locator('input[name="otc"]:visible').first
+    otc_input = page.get_by_placeholder("Code").or_(page.locator('input[name="otc"]')).first
     try:
         print("⏳ Waiting for 2FA code input field...")
         await otc_input.wait_for(state="visible", timeout=10000)
@@ -192,14 +190,14 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
     # Check "Don't ask again for 1 day"
     await _try_check_persist_checkbox(page)
 
-    await page.click('input[type="submit"], input[id="idSIButton9"]')
+    await page.get_by_role("button", name="Verify").click()
     await asyncio.sleep(3)
 
     await handle_security_interrupts(page)
 
     # 6. "Stay signed in?" Prompt
     try:
-        stay_btn = page.locator('input[id="idSIButton9"], input[value="Yes"]').first
+        stay_btn = page.get_by_role("button", name="Yes").first
         if await stay_btn.is_visible(timeout=3000):
             print("✅ Handling 'Stay signed in?' prompt...")
             await _try_check_persist_checkbox(page)
@@ -307,4 +305,20 @@ async def run_daily_login_async(creds: dict) -> bool:
 
 
 def run_daily_login(creds: dict) -> bool:
-    return asyncio.run(run_daily_login_async(creds))
+    """Entry point with 3-retry network resilience logic."""
+    for attempt in range(1, 4):
+        print(f"🔄 Auto-login attempt {attempt}/3...")
+        try:
+            # Executes the async flow securely
+            success = asyncio.run(run_daily_login_async(creds))
+            if success:
+                return True
+        except Exception as e:
+            print(f"⚠️ Network or timeout error on attempt {attempt}: {e}")
+
+        if attempt < 3:
+            print("⏳ Retrying in 5 seconds due to slow connection...")
+            time.sleep(5)
+
+    print("❌ All 3 background login attempts failed. Routing to network error screen.")
+    return False
