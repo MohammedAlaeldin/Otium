@@ -25,7 +25,7 @@ class TeamsBackend:
         clean = re.sub(r'<[^>]+?>', '', raw_text)
         clean = html.unescape(clean)
         clean = clean.replace('\xa0', ' ').strip()
-        
+
         if clean.startswith("8:orgid:") or clean.startswith("8:0:"):
             return ""
         return clean
@@ -240,27 +240,29 @@ class TeamsBackend:
                         title = conv.get("properties", {}).get("topic", "")
                         if not title:
                             title = conv.get("threadProperties", {}).get("topic", "")
-                        
+
                         last_msg = conv.get("lastMessage", {})
-                        
+
                         if not title:
                             title = last_msg.get("imdisplayname", "")
                             if not title:
                                 title = "Group Chat" if "19:" in thread_id else "1-on-1 Chat"
 
                         content = last_msg.get("content", "")
-                        
+
                         if content.strip().startswith("{") and ('"eventtime"' in content or '"initiator"' in content):
                             content = "System event or call log..."
 
                         clean_text = self._clean_text(content) if content else "No recent messages..."
                         sender = last_msg.get("imdisplayname", "Unknown")
+                        msg_time = last_msg.get("originalarrivaltime", "")
 
                         chats.append({
                             "id": thread_id,
                             "title": title,
                             "sender": sender,
-                            "last_message": clean_text[:120] if clean_text else "No recent messages..."
+                            "last_message": clean_text[:120] if clean_text else "No recent messages...",
+                            "time": msg_time
                         })
                 else:
                     self.last_errors.append(f"Internal Chat Error {res.status_code}")
@@ -313,13 +315,15 @@ class TeamsBackend:
                 msgs = []
                 for msg in res.json().get("messages", []):
                     msg_type = msg.get("messagetype", "")
-                    
-                    if msg_type.startswith("Event/") or msg_type.startswith("ThreadActivity/") or msg_type.startswith("Control/"):
+
+                    if msg_type.startswith("Event/") or msg_type.startswith("ThreadActivity/") or msg_type.startswith(
+                            "Control/"):
                         continue
 
                     content = msg.get("content", "")
-                    
-                    if content.strip().startswith("{") and ('"eventtime"' in content or '"initiator"' in content or '"members"' in content):
+
+                    if content.strip().startswith("{") and (
+                            '"eventtime"' in content or '"initiator"' in content or '"members"' in content):
                         continue
 
                     clean_text = self._clean_text(content)
@@ -335,43 +339,37 @@ class TeamsBackend:
         return []
 
     def fetch_channel_messages(self, team_id: str, channel_id: str) -> list:
-        """Fetches channel posts, extracting creation timestamps and aggressively parsing attachments."""
         self._ensure_auth()
         if not self.graph_token: return []
-        
+
         headers = {"Authorization": self.graph_token, "Accept": "application/json"}
         try:
-            # Increased $top from 20 to 40 to ensure older announcements with files aren't missed
             res = requests.get(
                 f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{channel_id}/messages?$top=40",
                 headers=headers, timeout=30)
-            
+
             if res.status_code == 200:
                 msgs = []
                 for msg in res.json().get("value", []):
                     raw_content = msg.get("body", {}).get("content", "")
                     clean_text = self._clean_text(raw_content)
-                    
+
                     if not clean_text:
                         clean_text = msg.get("summary", "")
                     if not clean_text:
                         clean_text = msg.get("subject", "")
 
-                    # Broadened attachment extraction logic
                     attachments = []
                     for att in (msg.get("attachments") or []):
                         name = att.get("name")
-                        # Some Graph API attachments use webUrl instead of contentUrl
                         url = att.get("contentUrl") or att.get("webUrl")
-                        
-                        # Ignore inline base64 images, but keep valid links even if the name is blank
+
                         if url and not url.startswith("data:"):
                             attachments.append({
-                                "name": name if name else "Attached File", 
+                                "name": name if name else "Attached File",
                                 "url": url
                             })
 
-                    # Ignore ghost messages that have neither text nor valid files
                     if not clean_text and not attachments:
                         continue
 
@@ -398,12 +396,14 @@ class TeamsBackend:
         return []
 
 
-# --- Global Instance & Top-Level Exports ---
 _teams_backend_instance = TeamsBackend()
+
 
 def fetch_dashboard_data() -> dict: return _teams_backend_instance.fetch_dashboard_data()
 
+
 def fetch_chat_history(chat_id: str) -> list: return _teams_backend_instance.fetch_chat_history(chat_id)
 
-def fetch_channel_messages(team_id: str, channel_id: str) -> list: 
+
+def fetch_channel_messages(team_id: str, channel_id: str) -> list:
     return _teams_backend_instance.fetch_channel_messages(team_id, channel_id)

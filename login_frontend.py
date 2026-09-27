@@ -18,6 +18,26 @@ try:
 except ImportError:
     print("⚠️ Warning: Could not locate login_backend.py automatically. Make sure the folder path is correct.")
 
+# ==========================================
+# DESIGN SYSTEM & COLOR PALETTE
+# ==========================================
+THEME = {
+    "bg_dark": "#121216",
+    "card_bg": "#1E1E2A",
+    "header_bg": "#181822",
+    "border": "#323246",
+    "border_hover": "#4B4B66",
+    "text_primary": "#F1F5F9",
+    "text_secondary": "#94A3B8",
+    "text_muted": "#64748B",
+    "accent_indigo": "#6366F1",
+    "accent_hover": "#4F46E5",
+    "lock_red": "#EF4444",
+    "success_green": "#10B981",
+    "success_hover": "#059669",
+    "warning_yellow": "#EAB308"
+}
+
 # SETTING UP CUSTOMTKINTER APPEARANCE
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -25,7 +45,8 @@ ctk.set_default_color_theme("blue")
 
 class OtiumLoginApp(ctk.CTkFrame):
     def __init__(self, master, on_success_callback=None, **kwargs):
-        super().__init__(master, **kwargs)
+        # Match the main app background
+        super().__init__(master, fg_color=THEME["bg_dark"], **kwargs)
 
         self.on_success_callback = on_success_callback
 
@@ -40,16 +61,22 @@ class OtiumLoginApp(ctk.CTkFrame):
         self.target_y = 0
         self.target_x = 0
 
-        #  1. THE MAIN LOGIN CARD
-        self.login_frame = ctk.CTkFrame(self, corner_radius=15, fg_color="#2b2b2b")
+        # 1. THE MAIN LOGIN CARD
+        self.login_frame = ctk.CTkFrame(
+            self,
+            corner_radius=15,
+            fg_color=THEME["card_bg"],
+            border_color=THEME["border"],
+            border_width=1
+        )
         self.login_frame.place(relx=0.5, rely=0.5, relwidth=0.48, relheight=0.75, anchor="center")
 
-        #  2. TEXT ELEMENTS
+        # 2. TEXT ELEMENTS
         self.title_label = ctk.CTkLabel(
             self.login_frame,
             text="OTIUM",
             font=ctk.CTkFont(family="League Spartan", size=45, weight="bold"),
-            text_color="#D4BE18"
+            text_color=THEME["text_primary"]
         )
         self.title_label.pack(pady=(30, 5))
 
@@ -57,42 +84,61 @@ class OtiumLoginApp(ctk.CTkFrame):
             self.login_frame,
             text="Your Academic Command Center",
             font=ctk.CTkFont(family="Helvetica", size=14, slant="italic"),
-            text_color="#A9A9A9"
+            text_color=THEME["text_secondary"]
         )
         self.motto_label.pack(pady=(0, 20))
 
         # 3. INPUTS
-        self.email_entry = ctk.CTkEntry(self.login_frame, placeholder_text="Student Email Address", height=45)
+        self.email_entry = ctk.CTkEntry(
+            self.login_frame, placeholder_text="Student Email Address", height=45,
+            fg_color=THEME["bg_dark"], border_color=THEME["border"], text_color=THEME["text_primary"]
+        )
         self.email_entry.pack(pady=8, fill="x", padx=60)
 
-        self.password_entry = ctk.CTkEntry(self.login_frame, placeholder_text="Password", show="*", height=45)
+        self.password_entry = ctk.CTkEntry(
+            self.login_frame, placeholder_text="Password", show="*", height=45,
+            fg_color=THEME["bg_dark"], border_color=THEME["border"], text_color=THEME["text_primary"]
+        )
         self.password_entry.pack(pady=8, fill="x", padx=60)
 
         # 4. SECURE KEY & TOOLTIP
         self.key_frame = ctk.CTkFrame(self.login_frame, fg_color="transparent")
         self.key_frame.pack(pady=8, fill="x", padx=60)
 
-        self.secure_key_entry = ctk.CTkEntry(self.key_frame, placeholder_text="Secure Secret Key", height=45)
+        self.secure_key_entry = ctk.CTkEntry(
+            self.key_frame, placeholder_text="Secure Secret Key", height=45,
+            fg_color=THEME["bg_dark"], border_color=THEME["border"], text_color=THEME["text_primary"]
+        )
         self.secure_key_entry.pack(side="left", fill="x", expand=True)
 
-        self.info_icon = ctk.CTkLabel(self.key_frame, text=" ❓ ", width=40, height=40, cursor="hand2")
+        self.info_icon = ctk.CTkLabel(
+            self.key_frame, text=" ❓ ", width=40, height=40, cursor="hand2",
+            text_color=THEME["text_secondary"]
+        )
         self.info_icon.pack(side="left", padx=(5, 0))
 
         # Tooltip Box
-        self.tooltip_box = ctk.CTkFrame(self, fg_color="#2b2b2b", border_width=1, border_color="gray", corner_radius=8)
+        self.tooltip_box = ctk.CTkFrame(
+            self,
+            fg_color=THEME["header_bg"],
+            border_width=1,
+            border_color=THEME["border"],
+            corner_radius=8
+        )
 
         self.desc_text = ctk.CTkLabel(
             self.tooltip_box,
             text="Click this link to view a guide on how to obtain your 2FA Secret Key:",
             wraplength=230,
-            justify="left"
+            justify="left",
+            text_color=THEME["text_primary"]
         )
         self.desc_text.pack(padx=15, pady=(10, 0))
 
         self.link_text = ctk.CTkLabel(
             self.tooltip_box,
             text="GUIDE",
-            text_color="#1f6aa5",
+            text_color=THEME["accent_indigo"],
             font=ctk.CTkFont(underline=True),
             cursor="hand2"
         )
@@ -106,30 +152,31 @@ class OtiumLoginApp(ctk.CTkFrame):
             self.login_frame,
             text="",
             font=ctk.CTkFont(size=13, weight="bold"),
-            text_color="#E74C3C"
+            text_color=THEME["lock_red"]
         )
         self.status_label.pack(pady=5)
         self.status_label.bind("<Button-1>", self.copy_code_to_clipboard)
 
-        #  LOGIN BUTTON
+        # LOGIN BUTTON
         self.login_button = ctk.CTkButton(
             self.login_frame,
             text="Log In",
             font=ctk.CTkFont(size=15, weight="bold"),
             height=45,
-            fg_color="#1f6aa5",
-            hover_color="#144870",
+            fg_color=THEME["accent_indigo"],
+            hover_color=THEME["accent_hover"],
+            text_color=THEME["text_primary"],
             corner_radius=8,
             cursor="hand2",
             command=self.handle_login_click
         )
         self.login_button.pack(pady=(5, 10), fill="x", padx=60)
 
-        #  BOTTOM NOTES
+        # BOTTOM NOTES
         self.note_label = ctk.CTkLabel(
             self,
             text="All credentials are securely stored and locally encrypted on your device.",
-            text_color="yellow"
+            text_color=THEME["text_muted"]
         )
         self.note_label.pack(side="bottom", pady=15)
 
@@ -174,7 +221,7 @@ class OtiumLoginApp(ctk.CTkFrame):
             code = current_text.split("TOTP:")[1].split("(")[0].strip()
             self.clipboard_clear()
             self.clipboard_append(code)
-            self.note_label.configure(text=f"📋 Copied code {code} to clipboard!", text_color="#2ECC71")
+            self.note_label.configure(text=f"📋 Copied code {code} to clipboard!", text_color=THEME["success_green"])
 
     def update_totp_live(self):
         if not self.active_secret:
@@ -183,7 +230,7 @@ class OtiumLoginApp(ctk.CTkFrame):
         code, time_left = login_backend.generate_current_totp(self.active_secret)
         self.status_label.configure(
             text=f"🔑 Your TOTP: {code} ({time_left}s) [Click to Copy]",
-            text_color="#F1C40F",
+            text_color=THEME["warning_yellow"],
             cursor="hand2"
         )
         self.totp_timer_job = self.after(1000, self.update_totp_live)
@@ -203,12 +250,12 @@ class OtiumLoginApp(ctk.CTkFrame):
         elif "TOTP_ERROR:" in error_msg:
             clean_msg = "❌ 2FA Error: Secret key invalid or not activated on Microsoft."
 
-        self.status_label.configure(text=clean_msg, text_color="#E74C3C", cursor="")
+        self.status_label.configure(text=clean_msg, text_color=THEME["lock_red"], cursor="")
         self.login_button.configure(
             state="normal",
             text="Log In",
-            fg_color="#1f6aa5",
-            hover_color="#144870",
+            fg_color=THEME["accent_indigo"],
+            hover_color=THEME["accent_hover"],
             command=self.handle_login_click
         )
 
@@ -238,8 +285,11 @@ class OtiumLoginApp(ctk.CTkFrame):
         user_email = self.email_entry.get().strip()
         user_password = self.password_entry.get().strip()
 
-        self.status_label.configure(text="⏳ Verifying secret key & logging into eBwise...", text_color="#3498DB",
-                                    cursor="")
+        self.status_label.configure(
+            text="⏳ Verifying secret key & logging into eBwise...",
+            text_color=THEME["accent_indigo"],
+            cursor=""
+        )
         self.login_button.configure(state="disabled", text="Verifying...")
 
         threading.Thread(
@@ -255,7 +305,7 @@ class OtiumLoginApp(ctk.CTkFrame):
 
         is_valid, msg = login_backend.validate_credentials_format(user_email, user_password, user_secret)
         if not is_valid:
-            self.status_label.configure(text=f"❌ {msg}", text_color="#E74C3C")
+            self.status_label.configure(text=f"❌ {msg}", text_color=THEME["lock_red"])
             return
 
         self.active_secret = user_secret
@@ -263,13 +313,13 @@ class OtiumLoginApp(ctk.CTkFrame):
 
         self.login_button.configure(
             text="Next ➔",
-            fg_color="#27AE60",
-            hover_color="#1E8449",
+            fg_color=THEME["success_green"],
+            hover_color=THEME["success_hover"],
             command=self.handle_next_click
         )
 
 
-# Standalone runner for testing login_frontend individually
+#Standalone runner for testing login_frontend individually
 if __name__ == "__main__":
     root = ctk.CTk()
     root.geometry("900x650")
