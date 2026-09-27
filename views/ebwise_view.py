@@ -24,6 +24,15 @@ THEME = {
     "lock_red": "#EF4444"
 }
 
+# Unified Tab styling used across all app views
+UNIFIED_TAB_COLORS = {
+    "selected_color": "#4F46E5",
+    "selected_hover_color": "#4338CA",
+    "unselected_color": "#1E1E2A",
+    "unselected_hover_color": "#2B2B3D",
+    "text_color": "#F1F5F9"
+}
+
 RESOURCE_STYLES = {
     "pdf": ("📄", "PDF", "#F87171", "#2D1D24"),
     "ppt": ("📊", "PPT", "#FBBF24", "#2D261B"),
@@ -161,9 +170,17 @@ class EbwiseView(ctk.CTkFrame):
         ctk.CTkLabel(self.scroll_container, text="⏳ Loading live eBwise dashboard...", font=ctk.CTkFont(size=14),
                      text_color=THEME["text_secondary"]).pack(pady=60)
 
+    def refresh_data(self):
+        if callable(self.fetch_callback):
+            self.fetch_callback()
+        else:
+            self._on_filter_change(self.current_filter)
+
     def update_data(self, data: dict, selected_filter: str = "In Progress"):
         self.cached_data = data
         self.current_filter = selected_filter
+        if hasattr(self, "sync_btn") and self.sync_btn.winfo_exists():
+            self.sync_btn.configure(state="normal", text="↻ Refresh")
         if data.get("status") != "SUCCESS":
             for widget in self.scroll_container.winfo_children(): widget.destroy()
             ctk.CTkLabel(self.scroll_container, text=f"⚠️ Failed to load data (Status: {data.get('status')})",
@@ -185,24 +202,28 @@ class EbwiseView(ctk.CTkFrame):
 
     # --- TOP BAR & NAVIGATION ---
     def _build_top_bar(self):
-        top_bar = ctk.CTkFrame(self.scroll_container, fg_color="transparent")
+        top_bar = ctk.CTkFrame(self.scroll_container, fg_color="transparent", height=50)
         top_bar.pack(fill="x", pady=(0, 20))
+        top_bar.pack_propagate(False)
 
+        # Left Header Section
         left_header = ctk.CTkFrame(top_bar, fg_color="transparent")
-        left_header.pack(side="left")
+        left_header.pack(side="left", fill="y")
 
         ctk.CTkLabel(left_header, text="My Courses", font=ctk.CTkFont(size=22, weight="bold"),
                      text_color=THEME["text_primary"]).pack(side="left", padx=(0, 15))
 
         self.reorder_btn = ctk.CTkButton(
-            left_header, text="✅ Done" if self.is_reorder_mode else "⚙️ Reorder", width=90, height=28,
+            left_header, text="✅ Done" if self.is_reorder_mode else "⚙️ Reorder", width=90, height=32,
             fg_color=THEME["reorder_active"] if self.is_reorder_mode else THEME["card_bg"],
             hover_color=THEME["accent_hover"],
             text_color="#000000" if self.is_reorder_mode else THEME["text_primary"],
             font=ctk.CTkFont(size=12, weight="bold"),
+            border_width=1 if not self.is_reorder_mode else 0,
+            border_color=THEME["border"],
             command=self._toggle_reorder_mode
         )
-        self.reorder_btn.pack(side="left")
+        self.reorder_btn.pack(side="left", pady=9)
 
         self.dpad_frame = ctk.CTkFrame(left_header, fg_color="transparent")
         if self.is_reorder_mode:
@@ -219,22 +240,33 @@ class EbwiseView(ctk.CTkFrame):
                          font=ctk.CTkFont(size=10), text_color=THEME["text_secondary"]).grid(row=0, column=3, rowspan=2,
                                                                                              padx=10)
 
+        # Right Header Section: Refresh Button
         right_header = ctk.CTkFrame(top_bar, fg_color="transparent")
-        right_header.pack(side="right")
+        right_header.pack(side="right", fill="y")
 
+        self.sync_btn = ctk.CTkButton(
+            right_header, text="↻ Refresh", width=100, height=32,
+            fg_color=THEME["card_bg"], hover_color=THEME["border_hover"], text_color=THEME["text_primary"],
+            border_width=1, border_color=THEME["border"], font=ctk.CTkFont(size=12, weight="bold"),
+            command=self.refresh_data
+        )
+        self.sync_btn.pack(side="right", pady=9)
+
+        # Center: Tabs (Absolute placement guarantees dead center matching Outlook/Teams)
         tab_options = self.preferences.get("tab_order", ["In Progress", "Past", "Future", "All"])
         if self.current_filter not in tab_options: self.current_filter = tab_options[0]
 
+        tab_colors = dict(UNIFIED_TAB_COLORS)
+        if self.is_reorder_mode and self.selected_item_type == "tab":
+            tab_colors["selected_color"] = THEME["reorder_active"]
+
         self.tab_bar = ctk.CTkSegmentedButton(
-            right_header, values=tab_options, command=self._on_filter_change,
-            selected_color=THEME["reorder_active"] if (self.is_reorder_mode and self.selected_item_type == "tab") else
-            THEME["accent_indigo"],
-            selected_hover_color=THEME["accent_hover"], unselected_color=THEME["card_bg"],
-            unselected_hover_color=THEME["header_bg"],
-            text_color=THEME["text_primary"]
+            top_bar, values=tab_options, command=self._on_filter_change,
+            height=34, font=ctk.CTkFont(size=13, weight="bold"),
+            **tab_colors
         )
         self.tab_bar.set(self.selected_tab if (self.is_reorder_mode and self.selected_tab) else self.current_filter)
-        self.tab_bar.pack(side="right")
+        self.tab_bar.place(relx=0.5, rely=0.5, anchor="center")
 
     # --- CANCELLABLE SMOOTH RENDERING ---
     def _on_filter_change(self, selected_value: str):
@@ -266,6 +298,9 @@ class EbwiseView(ctk.CTkFrame):
         self.card_widgets.clear()
 
         self._build_top_bar()
+        if hasattr(self, "sync_btn") and self.sync_btn.winfo_exists():
+            self.sync_btn.configure(state="disabled", text="Syncing...")
+
         self.grid_frame = ctk.CTkFrame(self.scroll_container, fg_color="transparent")
         self.grid_frame.pack(fill="both", expand=True)
         self.grid_frame.columnconfigure((0, 1, 2), weight=1, uniform="course_cols")
@@ -300,6 +335,8 @@ class EbwiseView(ctk.CTkFrame):
     def _finish_render(self, result: dict, req_id: int):
         if req_id != self.active_request_id or (self.active_cancel_event and self.active_cancel_event.is_set()):
             return
+        if hasattr(self, "sync_btn") and self.sync_btn.winfo_exists():
+            self.sync_btn.configure(state="normal", text="↻ Refresh")
         if hasattr(self, "loading_lbl") and self.loading_lbl.winfo_exists():
             self.loading_lbl.destroy()
 
@@ -542,7 +579,7 @@ class EbwiseView(ctk.CTkFrame):
         ctk.CTkLabel(breadcrumb_frame, text=f"  /  {code}", font=ctk.CTkFont(size=13),
                      text_color=THEME["text_secondary"]).pack(side="left")
 
-        hero_card = ctk.CTkFrame(self.scroll_container, fg_color="transparent",border_width=0)
+        hero_card = ctk.CTkFrame(self.scroll_container, fg_color="transparent", border_width=0)
         hero_card.pack(fill="x", pady=(0, 20))
 
         hero_content = ctk.CTkFrame(hero_card, fg_color="transparent")
@@ -556,7 +593,6 @@ class EbwiseView(ctk.CTkFrame):
         sections = course.get("sections", [])
 
         if not sections:
-            # Fallback for flat files if sections fail
             files = course.get("files", [])
             sec_card = CollapsibleFrame(self.scroll_container, title="📁 Course Resources & Files")
             sec_card.pack(fill="x", pady=8)
@@ -567,14 +603,12 @@ class EbwiseView(ctk.CTkFrame):
                              text_color=THEME["text_secondary"]).pack(anchor="w", padx=10, pady=5)
             return
 
-        # Render each Moodle section dynamically
         for sec in sections:
             sec_name = sec.get("name") or "General"
             sec_uservisible = sec.get("uservisible", True)
             sec_avail_info = sec.get("availabilityinfo", "")
             modules = sec.get("modules", [])
 
-            # Skip empty hidden sections
             if not sec_uservisible and not modules and not sec_avail_info:
                 continue
 

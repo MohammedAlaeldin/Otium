@@ -66,25 +66,17 @@ class DashboardWindow(ctk.CTkFrame):
         )
         self.title_label.pack(side="left", padx=10)
 
-        self.sync_status_label = ctk.CTkLabel(
-            self.header,
-            text="Syncing eBwise...",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=THEME["warning"]
-        )
-        self.sync_status_label.pack(side="right", padx=20)
-
         # --- Main Body Area ---
         self.body = ctk.CTkFrame(self, corner_radius=0, fg_color=THEME["bg_dark"])
         self.body.pack(fill="both", expand=True, side="bottom")
 
-        # Sidebar
+        # Container occupies full width permanently (avoids view reflow on toggle)
+        self.container = ctk.CTkFrame(self.body, corner_radius=0, fg_color="transparent")
+        self.container.pack(fill="both", expand=True)
+
+        # Overlay Sidebar (placed absolutely over body without affecting container)
         self.sidebar = ctk.CTkFrame(self.body, width=self.sidebar_width, corner_radius=0, fg_color=THEME["header_bg"],
                                     border_color=THEME["border"], border_width=1)
-        self.sidebar.pack_propagate(False)
-
-        self.container = ctk.CTkFrame(self.body, corner_radius=0, fg_color="transparent")
-        self.container.pack(side="right", fill="both", expand=True)
 
         # Initialize Views
         self.views = {
@@ -99,14 +91,16 @@ class DashboardWindow(ctk.CTkFrame):
         self.refresh_live_data()
 
     def toggle_sidebar(self):
+        """Flips sidebar visibility using absolute placement to bypass layout reflows."""
         if self.sidebar_visible:
-            self.sidebar.pack_forget()
+            self.sidebar.place_forget()
         else:
-            self.sidebar.pack(side="left", fill="y", before=self.container)
+            # CustomTkinter forbids setting width/height inside place()
+            self.sidebar.place(x=0, y=0, relheight=1.0)
+            self.sidebar.tkraise()
         self.sidebar_visible = not self.sidebar_visible
 
     def refresh_live_data(self, classification: str = "inprogress", selected_filter: str = "In Progress"):
-        self.sync_status_label.configure(text="Syncing eBwise...", text_color=THEME["warning"])
         threading.Thread(
             target=self._worker_fetch_data,
             args=(classification, selected_filter),
@@ -121,17 +115,11 @@ class DashboardWindow(ctk.CTkFrame):
         status = data.get("status")
 
         if status == "SUCCESS":
-            self.sync_status_label.configure(text="● Live Data Synced", text_color=THEME["success"])
             ebwise_view = self.views.get("Ebwise")
             if ebwise_view and hasattr(ebwise_view, "update_data"):
                 ebwise_view.update_data(data, selected_filter=selected_filter)
         elif status == "EXPIRED":
-            self.sync_status_label.configure(text="⚠️ Session Expired", text_color=THEME["danger"])
             self.logout()
-        elif status == "NO_TOKEN":
-            self.sync_status_label.configure(text="⚠️ API token unavailable", text_color=THEME["danger"])
-        else:
-            self.sync_status_label.configure(text="⚠️ Sync Failed", text_color=THEME["danger"])
 
     def _build_sidebar_menu(self):
         nav_items = ["Home", "Ebwise", "Outlook", "Teams"]
@@ -168,7 +156,7 @@ class DashboardWindow(ctk.CTkFrame):
         logout_btn.pack(fill="x", padx=10, pady=20)
 
     def show_view(self, view_name: str, payload: dict = None):
-        """Switches the active view and optionally passes payload data for deep linking."""
+        """Switches active view and dismisses sidebar cleanly."""
         self.title_label.configure(text=view_name)
 
         for name, btn in self.sidebar_buttons.items():
@@ -177,6 +165,9 @@ class DashboardWindow(ctk.CTkFrame):
             else:
                 btn.configure(fg_color="transparent", text_color=THEME["text_primary"])
 
+        if self.sidebar_visible:
+            self.toggle_sidebar()
+
         for view in self.views.values():
             view.pack_forget()
 
@@ -184,12 +175,8 @@ class DashboardWindow(ctk.CTkFrame):
         if active_view:
             active_view.pack(fill="both", expand=True)
 
-            # Deep Linking Protocol
             if payload and hasattr(active_view, "handle_navigation_payload"):
-                active_view.handle_navigation_payload(payload)
-
-        if self.sidebar_visible:
-            self.toggle_sidebar()
+                self.after(50, lambda: active_view.handle_navigation_payload(payload))
 
     def logout(self):
         clear_all_saved_data()

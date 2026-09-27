@@ -249,8 +249,8 @@ async def run_daily_login_async(creds: dict) -> bool:
     print("🚀 Starting daily auto-login process (Parallel Sync)...")
     async with async_playwright() as p:
         browser = await p.chromium.launch(
-            headless=False,
-            args=["--disable-blink-features=AutomationControlled"]
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled", "--disable-gpu"]
         )
 
         base_context_kwargs = {
