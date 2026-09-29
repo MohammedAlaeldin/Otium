@@ -2,7 +2,9 @@ import os
 import json
 import threading
 import requests
+import subprocess
 import customtkinter as ctk
+from PIL import Image, ImageTk
 
 from storage import SESSION_FILE
 import storage
@@ -11,11 +13,21 @@ from dashboard import DashboardWindow
 from login_frontend import OtiumLoginApp
 
 # =============================================================
+# Ensure Playwright browser is installed for new users
+# =============================================================
+try:
+    subprocess.run(["playwright", "install", "chromium"], capture_output=True, check=False)
+except Exception:
+    pass
+
+# =============================================================
 # Quick patch for CustomTkinter destroy bug on shutdown
 # This prevents the "AttributeError: '_font'" crash when closing
 # =============================================================
 from customtkinter.windows.widgets.ctk_button import CTkButton
+
 _original_destroy = CTkButton.destroy
+
 
 def _safe_destroy(self):
     try:
@@ -23,6 +35,8 @@ def _safe_destroy(self):
     except AttributeError as e:
         if "_font" not in str(e):
             raise
+
+
 CTkButton.destroy = _safe_destroy
 # =============================================================
 
@@ -70,8 +84,28 @@ class AppController(ctk.CTk):
         self.geometry("900x650")
         self.minsize(700, 500)
 
+        # --- Set the Window Title Bar Icon ---
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            ico_path = os.path.join(base_dir, "logo.ico")
+            png_path = os.path.join(base_dir, "logo.png")
+
+            if os.path.exists(ico_path):
+                # Windows natively prefers .ico files for window borders
+                self.iconbitmap(ico_path)
+            elif os.path.exists(png_path):
+                # Fallback to PNG, saving the reference to prevent garbage collection
+                self._window_icon = ImageTk.PhotoImage(Image.open(png_path))
+                self.iconphoto(False, self._window_icon)
+            else:
+                print("⚠️ Could not find logo.ico or logo.png to set as window icon.")
+        except Exception as e:
+            print(f"Window icon warning: {e}")
+
         self.current_frame = None
-        self.check_initial_auth_state()
+
+        # Start the auth check 50ms after the UI loads so the window appears instantly
+        self.after(50, self.check_initial_auth_state)
 
     def check_initial_auth_state(self):
         """Uses fast check first; falls back to Playwright login only when expired."""

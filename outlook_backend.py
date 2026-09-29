@@ -162,7 +162,7 @@ class OutlookBackend:
                                   for r in msg.get("ToRecipients", [])],
                 "cc_recipients": [r.get("EmailAddress", {}).get("Name", r.get("EmailAddress", {}).get("Address", ""))
                                   for r in msg.get("CcRecipients", [])],
-                "time": self._parse_outlook_time(msg.get("DateTimeReceived", "")),
+                "time": self._parse_outlook_time(msg.get("ReceivedDateTime", "")),
                 "preview": self._generate_preview(msg.get("BodyPreview", ""))[:60],
                 "body": clean_html_body,
                 "is_read": msg.get("IsRead", True),
@@ -220,7 +220,7 @@ class OutlookBackend:
                     "cc_recipients": [
                         r.get("EmailAddress", {}).get("Name", r.get("EmailAddress", {}).get("Address", "")) for r in
                         msg.get("CcRecipients", [])],
-                    "time": self._parse_outlook_time(msg.get("DateTimeReceived", "")),
+                    "time": self._parse_outlook_time(msg.get("ReceivedDateTime", "")),
                     "preview": self._generate_preview(msg.get("BodyPreview", ""))[:60],
                     "body": clean_html_body,
                     "is_read": msg.get("IsRead", True),
@@ -245,7 +245,7 @@ class OutlookBackend:
                                   for r in m.get("ToRecipients", [])],
                 "cc_recipients": [r.get("EmailAddress", {}).get("Name", r.get("EmailAddress", {}).get("Address", ""))
                                   for r in m.get("CcRecipients", [])],
-                "time": self._parse_outlook_time(m.get("DateTimeReceived", "")),
+                "time": self._parse_outlook_time(m.get("ReceivedDateTime", "")),
                 "preview": self._generate_preview(m.get("BodyPreview", ""))[:60],
                 "body": self._strip_mobile_signatures(m.get("Body", {}).get("Content", "")),
                 "is_read": m.get("IsRead", True),

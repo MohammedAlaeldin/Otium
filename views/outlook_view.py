@@ -507,7 +507,8 @@ class OutlookView(ctk.CTkFrame):
 
         blocks = [raw_parts[0]]
         for i in range(1, len(raw_parts), 2):
-            blocks.append(raw_parts[i] + raw_parts[i + 1])
+            if i + 1 < len(raw_parts):
+                blocks.append(raw_parts[i] + raw_parts[i + 1])
 
         blocks.reverse()
 
@@ -518,16 +519,25 @@ class OutlookView(ctk.CTkFrame):
             plain_text = re.sub(r'<[^>]+>', ' ', html_block)
             plain_text = re.sub(r'\s+', ' ', plain_text)
 
+            # Securely default to the backend data
             sender = root_msg.get("sender_name", "Unknown")
-            date_str = root_msg.get("time", "")
-            to_str = ", ".join(root_msg.get("to_recipients", [])) or "Undisclosed"
+            date_str = root_msg.get("time", "Unknown Date")
+            to_recipients = root_msg.get("to_recipients", [])
+            to_str = ", ".join(to_recipients) if to_recipients else "Undisclosed"
 
+            # Parse reply headers only if they exist; preserve backend data if missing
             match = re.search(r'(?:From|De):\s*(.*?)\s*(?:Sent|Date):\s*(.*?)\s*(?:To|A):\s*(.*?)\s*(?:Subject|Cc):',
                               plain_text, re.IGNORECASE)
             if match:
-                sender = match.group(1).strip()
-                date_str = match.group(2).strip()
-                to_str = match.group(3).strip()
+                sender = match.group(1).strip() or sender
+                date_str = match.group(2).strip() or date_str
+                to_str = match.group(3).strip() or to_str
+
+            # Aggressively strip the embedded "From/Sent/To/Subject" boilerplate from the HTML view
+            clean_html = re.sub(
+                r'(?i)(?:<div[^>]*>|<p[^>]*>|<span[^>]*>)?\s*(?:<b>|<strong>|<span[^>]*>)?From:\s*.*?(?:Sent|Date):\s*.*?To:\s*.*?Subject:\s*.*?(?:</div>|</p>|<br\s*/?>|<hr>){1,3}',
+                '', html_block, count=1, flags=re.DOTALL
+            )
 
             is_latest_reply = (idx == len(blocks) - 1)
 
@@ -536,7 +546,7 @@ class OutlookView(ctk.CTkFrame):
                 sender_email=root_msg.get("sender_email", ""),
                 date_str=date_str,
                 to_str=to_str,
-                body_html=html_block,
+                body_html=clean_html,
                 msg_id=root_msg.get("id") if is_latest_reply else None,
                 root_msg=root_msg
             )
@@ -555,20 +565,51 @@ class OutlookView(ctk.CTkFrame):
                               font=ctk.CTkFont(size=16, weight="bold"))
         avatar.pack(side="left", anchor="n")
 
+        # --- COLLAPSIBLE INFO FRAME ---
         info_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
         info_frame.pack(side="left", fill="x", expand=True, padx=12)
 
-        ctk.CTkLabel(info_frame, text=sender_name, font=ctk.CTkFont(size=14, weight="bold"),
-                     text_color=THEME["text_primary"], anchor="w").pack(anchor="w")
-        ctk.CTkLabel(info_frame, text=f"To: {to_str[:70]}", font=ctk.CTkFont(size=11), text_color=THEME["text_muted"],
-                     anchor="w").pack(anchor="w")
+        sender_lbl = ctk.CTkLabel(info_frame, text=sender_name, font=ctk.CTkFont(size=14, weight="bold"),
+                                  text_color=THEME["text_primary"], anchor="w", cursor="hand2")
+        sender_lbl.pack(anchor="w")
+
+        # Truncated string for collapsed view
+        short_to = (to_str[:35] + "...") if len(to_str) > 35 else to_str
+        to_lbl_collapsed = ctk.CTkLabel(info_frame, text=f"To: {short_to} ▼", font=ctk.CTkFont(size=11),
+                                        text_color=THEME["text_muted"], anchor="w", cursor="hand2")
+        to_lbl_collapsed.pack(anchor="w")
+
+        # Expanded Details Frame
+        details_frame = ctk.CTkFrame(info_frame, fg_color="transparent")
+        ctk.CTkLabel(details_frame, text=f"From: {sender_name} <{sender_email}>",
+                     font=ctk.CTkFont(size=11), text_color=THEME["text_secondary"], anchor="w").pack(anchor="w")
+
+        # Use a scrolling textbox so massive "To" lists don't break the UI layout
+        to_textbox = ctk.CTkTextbox(details_frame, height=55, fg_color="transparent",
+                                    text_color=THEME["text_secondary"],
+                                    wrap="word", font=ctk.CTkFont(size=11))
+        to_textbox.insert("1.0", f"To: {to_str}")
+        to_textbox.configure(state="disabled")
+        to_textbox.pack(fill="x", pady=(2, 0))
+
+        def toggle_details(e):
+            if details_frame.winfo_ismapped():
+                details_frame.pack_forget()
+                to_lbl_collapsed.configure(text=f"To: {short_to} ▼")
+            else:
+                details_frame.pack(fill="x", pady=(2, 0))
+                to_lbl_collapsed.configure(text="Hide Details ▲")
+
+        sender_lbl.bind("<Button-1>", toggle_details)
+        to_lbl_collapsed.bind("<Button-1>", toggle_details)
+        # ------------------------------
 
         right_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
         right_frame.pack(side="right", anchor="n")
 
+        # The date string will now always render properly
         ctk.CTkLabel(right_frame, text=date_str, font=ctk.CTkFont(size=13, weight="bold"),
-                     text_color=THEME["text_primary"]).pack(
-            anchor="e", pady=(0, 4))
+                     text_color=THEME["text_primary"]).pack(anchor="e", pady=(0, 4))
 
         reply_data = dict(root_msg)
         reply_data["sender_name"] = sender_name
@@ -604,34 +645,13 @@ class OutlookView(ctk.CTkFrame):
         <html>
         <head>
         <style>
-            * {{
-                background-color: transparent !important;
-                color: {THEME["text_primary"]} !important;
-            }}
-            body {{
-                background-color: {THEME["header_bg"]} !important;
-                font-family: 'Segoe UI', sans-serif;
-                font-size: 14px;
-                margin: 0; padding: 10px;
-            }}
+            * {{ background-color: transparent !important; color: {THEME["text_primary"]} !important; }}
+            body {{ background-color: {THEME["header_bg"]} !important; font-family: 'Segoe UI', sans-serif; font-size: 14px; margin: 0; padding: 10px; }}
             a, a * {{ color: {THEME["accent_indigo"]} !important; text-decoration: none !important; }}
             a:hover {{ text-decoration: underline !important; }}
-            img {{ 
-                max-width: 100% !important; 
-                height: auto !important; 
-                display: block; 
-            }}
-            blockquote {{ 
-                border-left: 3px solid {THEME["accent_indigo"]}; 
-                margin: 10px 0; 
-                padding-left: 10px; 
-                color: {THEME["text_secondary"]} !important; 
-            }}
-            table, td, tr, th, tbody, thead {{ 
-                border-collapse: collapse; 
-                background: transparent !important; 
-                border: none !important; 
-            }}
+            img {{ max-width: 100% !important; height: auto !important; display: block; }}
+            blockquote {{ border-left: 3px solid {THEME["accent_indigo"]}; margin: 10px 0; padding-left: 10px; color: {THEME["text_secondary"]} !important; }}
+            table, td, tr, th, tbody, thead {{ border-collapse: collapse; background: transparent !important; border: none !important; }}
         </style>
         </head>
         <body>
@@ -640,7 +660,6 @@ class OutlookView(ctk.CTkFrame):
         </html>
         """
         box.load_html(injected_css_and_html)
-
     def load_attachments_ui(self, msg_id, parent_frame):
         lbl = ctk.CTkLabel(parent_frame, text="⏳ Checking for attachments...", text_color=THEME["text_secondary"])
         lbl.pack(pady=2, anchor="w")
