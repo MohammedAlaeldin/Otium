@@ -131,6 +131,11 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
             print("📧 Filling email field...")
             await email_field.fill(email)
             await page.get_by_role("button", name="Next").click()
+
+            email_error = page.locator("#usernameError")
+            if await email_error.is_visible(timeout=2500):
+                raise Exception("AUTH_FAILED: Invalid Email")
+
             await asyncio.sleep(2)
             break
         elif await password_field.is_visible():
@@ -147,8 +152,15 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
         print("🔑 Filling password field...")
         await password_field.fill(password)
         await page.get_by_role("button", name="Sign in").click()
+
+        pwd_error = page.locator("#passwordError")
+        if await pwd_error.is_visible(timeout=2500):
+            raise Exception("AUTH_FAILED: Invalid Password")
+
         await asyncio.sleep(2.5)
-    except Exception:
+    except Exception as e:
+        if "AUTH_FAILED" in str(e):
+            raise e
         if "ebwise.mmu.edu.my" in page.url and "login" not in page.url:
             return True
         else:
@@ -191,6 +203,11 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
     await _try_check_persist_checkbox(page)
 
     await page.get_by_role("button", name="Verify").click()
+
+    totp_error = page.locator('#otcError')
+    if await totp_error.is_visible(timeout=2500):
+        raise Exception("AUTH_FAILED: Invalid TOTP")
+
     await asyncio.sleep(3)
 
     await handle_security_interrupts(page)
@@ -238,13 +255,13 @@ async def sync_outlook(context):
         print(f"⚠️ Outlook sync warning: {e}")
 
 
-async def run_daily_login_async(creds: dict) -> bool:
+async def run_daily_login_async(creds: dict) -> tuple[bool, str]:
     email = creds.get("email")
     password = creds.get("password")
     totp_secret = creds.get("totp_secret", "").replace(" ", "").strip()
 
     if not email or not password or not totp_secret:
-        return False
+        return False, "AUTH_FAILED"
 
     print("🚀 Starting daily auto-login process (Parallel Sync)...")
     async with async_playwright() as p:
@@ -285,7 +302,9 @@ async def run_daily_login_async(creds: dict) -> bool:
             except Exception as e:
                 print(f"❌ Login sequence failed: {e}")
                 await browser.close()
-                return False
+                if "AUTH_FAILED" in str(e):
+                    return False, "AUTH_FAILED"
+                return False, "NETWORK_ERROR"
 
         # 3. Sync and Save
         if session_authenticated:
@@ -298,21 +317,24 @@ async def run_daily_login_async(creds: dict) -> bool:
             await context.storage_state(path=SESSION_FILE)
             await browser.close()
             print(f"💾 All sessions successfully updated and saved to {SESSION_FILE}!")
-            return True
+            return True, "SUCCESS"
 
         await browser.close()
-        return False
+        return False, "NETWORK_ERROR"
 
 
-def run_daily_login(creds: dict) -> bool:
+def run_daily_login(creds: dict) -> str:
     """Entry point with 3-retry network resilience logic."""
     for attempt in range(1, 4):
         print(f"🔄 Auto-login attempt {attempt}/3...")
         try:
             # Executes the async flow securely
-            success = asyncio.run(run_daily_login_async(creds))
+            success, status = asyncio.run(run_daily_login_async(creds))
             if success:
-                return True
+                return "SUCCESS"
+            if status == "AUTH_FAILED":
+                print("❌ Bad credentials detected. Aborting retries.")
+                return "AUTH_FAILED"
         except Exception as e:
             print(f"⚠️ Network or timeout error on attempt {attempt}: {e}")
 
@@ -321,4 +343,4 @@ def run_daily_login(creds: dict) -> bool:
             time.sleep(5)
 
     print("❌ All 3 background login attempts failed. Routing to network error screen.")
-    return False
+    return "NETWORK_ERROR"

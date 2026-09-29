@@ -125,13 +125,22 @@ class AppController(ctk.CTk):
         self.show_loading_screen("Refreshing session...")
 
         def bg_auth():
-            success = run_daily_login(creds)
-            if success:
+            status = run_daily_login(creds)
+            if status == "SUCCESS":
                 self.after(0, self.show_dashboard)
+            elif status == "AUTH_FAILED":
+                self.after(0, self.handle_auth_failure)
             else:
                 self.after(0, self.show_network_error)
 
         threading.Thread(target=bg_auth, daemon=True).start()
+
+    def handle_auth_failure(self):
+        """Clears outdated credentials and redirects to login."""
+        print("❌ Saved credentials are no longer valid. Purging data...")
+        if hasattr(storage, "clear_all_saved_data"):
+            storage.clear_all_saved_data()
+        self.show_login()
 
     def show_loading_screen(self, message="Loading..."):
         """Displays a loading state during session refresh."""
