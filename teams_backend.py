@@ -30,6 +30,48 @@ class TeamsBackend:
             return ""
         return clean
 
+    def _parse_message_content(self, raw_content: str) -> dict:
+        """Separates quoted reply content from the main message body."""
+        if not raw_content:
+            return {"text": "", "quote_sender": "", "quote_text": ""}
+
+        quote_match = re.search(
+            r'<(?:quote|blockquote)[^>]*>(.*?)</(?:quote|blockquote)>', 
+            raw_content, 
+            re.DOTALL | re.IGNORECASE
+        )
+
+        if quote_match:
+            full_quote_html = quote_match.group(0)
+            inner_quote_html = quote_match.group(1)
+            
+            reply_raw = raw_content.replace(full_quote_html, "").strip()
+            
+            sender_match = (
+                re.search(r'authorname=["\']([^"\']+)["\']', full_quote_html, re.IGNORECASE) or
+                re.search(r'author=["\']([^"\']+)["\']', full_quote_html, re.IGNORECASE) or
+                re.search(r'<strong[^>]*>(.*?)</strong>', inner_quote_html, re.IGNORECASE) or
+                re.search(r'<b[^>]*>(.*?)</b>', inner_quote_html, re.IGNORECASE)
+            )
+            
+            quote_sender = self._clean_text(sender_match.group(1)) if sender_match else "User"
+            clean_quote = self._clean_text(inner_quote_html)
+            
+            if quote_sender and clean_quote.startswith(quote_sender):
+                clean_quote = clean_quote[len(quote_sender):].strip()
+
+            return {
+                "text": self._clean_text(reply_raw),
+                "quote_sender": quote_sender,
+                "quote_text": clean_quote
+            }
+
+        return {
+            "text": self._clean_text(raw_content),
+            "quote_sender": "",
+            "quote_text": ""
+        }
+
     def _load_cached_tokens(self):
         try:
             if os.path.exists(self.cache_file):
@@ -326,11 +368,16 @@ class TeamsBackend:
                             '"eventtime"' in content or '"initiator"' in content or '"members"' in content):
                         continue
 
-                    clean_text = self._clean_text(content)
                     sender = msg.get("imdisplayname") or "User"
+                    parsed = self._parse_message_content(content)
 
-                    if clean_text:
-                        msgs.append({"sender": sender, "content": clean_text})
+                    if parsed["text"] or parsed["quote_text"]:
+                        msgs.append({
+                            "sender": sender,
+                            "content": parsed["text"],
+                            "quote_sender": parsed["quote_sender"],
+                            "quote_text": parsed["quote_text"]
+                        })
                 return msgs
             else:
                 print(f"❌ [CONSOLE ERROR] Fetch Chat History Failed ({res.status_code}): {res.text}")
@@ -386,7 +433,8 @@ class TeamsBackend:
                         "sender": sender,
                         "content": clean_text,
                         "attachments": attachments,
-                        "created_at": created_at
+                        "created_at": created_at,
+                        "web_url": msg.get("webUrl", "")
                     })
                 return msgs
             else:

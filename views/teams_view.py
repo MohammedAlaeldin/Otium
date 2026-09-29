@@ -152,9 +152,20 @@ class TeamsView(ctk.CTkFrame):
         self.tab_selector.place(relx=0.5, rely=0.5, anchor="center")
         self.tab_selector.set("Chats")
 
-        # Right: Refresh
+       # Right: Refresh & Notice
         self.top_right = ctk.CTkFrame(self.top_bar, fg_color="transparent")
         self.top_right.pack(side="right", fill="y")
+
+        # --- NEW NOTICE LABEL ---
+        self.notice_label = ctk.CTkLabel(
+            self.top_right,
+            text="‼️ IMPORTANT: After opening, if prompted to 'Open in Microsoft Teams', click Cancel,\nthen select 'Use the web app instead'.",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#EAB308", # Warning Yellow
+            justify="right"
+        )
+        self.notice_label.pack(side="left", padx=(0, 15), pady=9)
+        # ------------------------
 
         self.refresh_btn = ctk.CTkButton(
             self.top_right, text="↻ Refresh", width=100, height=32,
@@ -207,6 +218,17 @@ class TeamsView(ctk.CTkFrame):
     def _on_tab_changed(self, value: str):
         self.current_tab = value
         self._show_active_tab(value)
+
+        # --- UPDATE NOTICE TEXT DYNAMICALLY ---
+        if value in ["Channels", "Chats"]:
+            self.notice_label.configure(
+                text="‼️ IMPORTANT: After opening, if prompted to 'Open in Microsoft Teams', click Cancel,\nthen select 'Use the web app instead'."
+            )
+        elif value == "Calls":
+            self.notice_label.configure(
+                text="‼️ IMPORTANT: When joining, if prompted, click Cancel ➔ 'Continue in this browser'.\nWhen asked for permissions, click 'Allow while visiting this site'."
+            )
+        # --------------------------------------
 
     def _show_active_tab(self, tab_name: str):
         for view in (self.view_channels, self.view_chats, self.view_calls):
@@ -557,6 +579,16 @@ class TeamsView(ctk.CTkFrame):
                         ctk.CTkLabel(hdr_row, text=f"•  {date_str}", font=ctk.CTkFont(size=11),
                                      text_color=THEME["text_secondary"]).pack(side="left", padx=(8, 0))
 
+                    if m.get('web_url'):
+                        open_btn = ctk.CTkButton(
+                            hdr_row, text="↗ Open in Teams", width=100, height=24,
+                            font=ctk.CTkFont(size=11, weight="bold"),
+                            fg_color="transparent", hover_color=THEME["border_hover"], 
+                            text_color=THEME["text_secondary"],
+                            command=lambda url=m['web_url']: open_in_browser(url)
+                        )
+                        open_btn.pack(side="right", padx=(0, 5))
+
                     if m.get('content'):
                         ctk.CTkLabel(msg_card, text=m['content'], font=ctk.CTkFont(size=13),
                                      text_color=THEME["text_primary"], anchor="w", justify="left", wraplength=480).pack(
@@ -597,8 +629,21 @@ class TeamsView(ctk.CTkFrame):
                                    border_width=1, corner_radius=10)
         header_card.pack(fill="x", pady=(0, 15), ipady=5)
 
+        # Added side="left" to the title label
         ctk.CTkLabel(header_card, text=f"💬 {chat['title']}", font=ctk.CTkFont(size=18, weight="bold"),
-                     text_color=THEME["text_primary"]).pack(anchor="w", padx=15, pady=10)
+                     text_color=THEME["text_primary"]).pack(side="left", anchor="w", padx=15, pady=10)
+
+        # --- ADD THIS NEW BUTTON BLOCK ---
+        chat_url = f"https://teams.microsoft.com/l/chat/{chat['id']}/0"
+        open_chat_btn = ctk.CTkButton(
+            header_card, text="↗ Open in Teams", width=120, height=28,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=THEME["card_bg"], hover_color=THEME["border_hover"],
+            text_color=THEME["accent_indigo"], border_width=1, border_color=THEME["border"],
+            command=lambda url=chat_url: open_in_browser(url)
+        )
+        open_chat_btn.pack(side="right", padx=15, pady=10)
+        # ---------------------------------
 
         loading_lbl = ctk.CTkLabel(self.chat_messages_frame, text="⏳ Loading message history...",
                                    text_color=THEME["text_secondary"])
@@ -626,7 +671,39 @@ class TeamsView(ctk.CTkFrame):
 
                 ctk.CTkLabel(msg_card, text=m['sender'], font=ctk.CTkFont(weight="bold", size=12),
                              text_color=THEME["accent_indigo"], anchor="w").pack(fill="x", padx=12, pady=(10, 2))
-                ctk.CTkLabel(msg_card, text=m['content'], font=ctk.CTkFont(size=13), text_color=THEME["text_primary"],
-                             anchor="w", justify="left", wraplength=480).pack(fill="x", padx=12, pady=(0, 10))
+
+                # Render Quoted Reply if present
+                if m.get("quote_text"):
+                    quote_box = ctk.CTkFrame(
+                        msg_card,
+                        fg_color="#181822",
+                        border_color=THEME["accent_indigo"],
+                        border_width=1,
+                        corner_radius=6
+                    )
+                    quote_box.pack(fill="x", padx=12, pady=(4, 6))
+
+                    ctk.CTkLabel(
+                        quote_box,
+                        text=f"↩ Replying to {m.get('quote_sender', 'User')}",
+                        font=ctk.CTkFont(size=11, weight="bold"),
+                        text_color=THEME["accent_indigo"],
+                        anchor="w"
+                    ).pack(fill="x", padx=10, pady=(6, 2))
+
+                    ctk.CTkLabel(
+                        quote_box,
+                        text=m["quote_text"],
+                        font=ctk.CTkFont(size=12),
+                        text_color=THEME["text_secondary"],
+                        anchor="w",
+                        justify="left",
+                        wraplength=450
+                    ).pack(fill="x", padx=10, pady=(0, 6))
+
+                # Render Main Message Text
+                if m.get('content'):
+                    ctk.CTkLabel(msg_card, text=m['content'], font=ctk.CTkFont(size=13), text_color=THEME["text_primary"],
+                                 anchor="w", justify="left", wraplength=480).pack(fill="x", padx=12, pady=(2, 10))
 
         threading.Thread(target=_load_history, daemon=True).start()
