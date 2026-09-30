@@ -5,9 +5,6 @@ import ebwise_backend
 from ebwise_backend import open_ebwise_url_authenticated
 from storage import load_preferences, save_preferences
 
-# ==========================================
-# DESIGN SYSTEM & COLOR PALETTE
-# ==========================================
 THEME = {
     "bg_dark": "#121216",
     "card_bg": "#1E1E2A",
@@ -24,7 +21,6 @@ THEME = {
     "lock_red": "#EF4444"
 }
 
-# Unified Tab styling used across all app views
 UNIFIED_TAB_COLORS = {
     "selected_color": "#4F46E5",
     "selected_hover_color": "#4338CA",
@@ -136,6 +132,7 @@ class EbwiseView(ctk.CTkFrame):
 
         self.is_reorder_mode = False
         self.current_filter = "In Progress"
+        self.active_course_id = None
 
         # Request Cancellation & ID Tracking
         self.active_cancel_event = None
@@ -171,22 +168,43 @@ class EbwiseView(ctk.CTkFrame):
                      text_color=THEME["text_secondary"]).pack(pady=60)
 
     def refresh_data(self):
+        if hasattr(self, "sync_btn") and self.sync_btn.winfo_exists():
+            self.sync_btn.configure(state="disabled", text="Syncing...")
+
         if callable(self.fetch_callback):
-            self.fetch_callback()
+            self.fetch_callback(
+                classification={"In Progress": "inprogress", "Future": "future", "Past": "past", "All": "all"}.get(
+                    self.current_filter, "inprogress"), selected_filter=self.current_filter)
         else:
             self._on_filter_change(self.current_filter)
 
     def update_data(self, data: dict, selected_filter: str = "In Progress"):
         self.cached_data = data
         self.current_filter = selected_filter
+
         if hasattr(self, "sync_btn") and self.sync_btn.winfo_exists():
             self.sync_btn.configure(state="normal", text="↻ Refresh")
+
         if data.get("status") != "SUCCESS":
             for widget in self.scroll_container.winfo_children(): widget.destroy()
             ctk.CTkLabel(self.scroll_container, text=f"⚠️ Failed to load data (Status: {data.get('status')})",
                          text_color="#F87171", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=40)
             return
-        self.render_course_grid(selected_filter=selected_filter)
+
+        if self.active_course_id:
+            updated_course = None
+            for c in data.get("courses", []):
+                c_code, _ = parse_course_title(c.get("fullname", ""))
+                c_id = str(c.get("id") or c_code)
+                if c_id == self.active_course_id:
+                    updated_course = c
+                    break
+            if updated_course:
+                self.render_course_details(updated_course)
+            else:
+                self.render_course_grid(selected_filter=selected_filter)
+        else:
+            self.render_course_grid(selected_filter=selected_filter)
 
     def _get_sorted_courses(self) -> list:
         courses = list(self.cached_data.get("courses", []))
@@ -206,7 +224,6 @@ class EbwiseView(ctk.CTkFrame):
         top_bar.pack(fill="x", pady=(0, 20))
         top_bar.pack_propagate(False)
 
-        # Left Header Section
         left_header = ctk.CTkFrame(top_bar, fg_color="transparent")
         left_header.pack(side="left", fill="y")
 
@@ -240,7 +257,6 @@ class EbwiseView(ctk.CTkFrame):
                          font=ctk.CTkFont(size=10), text_color=THEME["text_secondary"]).grid(row=0, column=3, rowspan=2,
                                                                                              padx=10)
 
-        # Right Header Section: Refresh Button
         right_header = ctk.CTkFrame(top_bar, fg_color="transparent")
         right_header.pack(side="right", fill="y")
 
@@ -252,7 +268,6 @@ class EbwiseView(ctk.CTkFrame):
         )
         self.sync_btn.pack(side="right", pady=9)
 
-        # Center: Tabs (Absolute placement guarantees dead center matching Outlook/Teams)
         tab_options = self.preferences.get("tab_order", ["In Progress", "Past", "Future", "All"])
         if self.current_filter not in tab_options: self.current_filter = tab_options[0]
 
@@ -268,7 +283,6 @@ class EbwiseView(ctk.CTkFrame):
         self.tab_bar.set(self.selected_tab if (self.is_reorder_mode and self.selected_tab) else self.current_filter)
         self.tab_bar.place(relx=0.5, rely=0.5, anchor="center")
 
-    # --- CANCELLABLE SMOOTH RENDERING ---
     def _on_filter_change(self, selected_value: str):
         if self.is_reorder_mode:
             self.selected_item_type = "tab"
@@ -287,6 +301,7 @@ class EbwiseView(ctk.CTkFrame):
         self.active_cancel_event = cancel_evt
 
         self.current_filter = selected_value
+        self.active_course_id = None
         mapping = {"In Progress": "inprogress", "Future": "future", "Past": "past", "All": "all"}
         target_class = mapping.get(selected_value, "inprogress")
 
@@ -358,6 +373,7 @@ class EbwiseView(ctk.CTkFrame):
             self._build_course_card(self.grid_frame, course, idx, row, col)
 
     def render_course_grid(self, selected_filter: str = None):
+        self.active_course_id = None
         if selected_filter: self.current_filter = selected_filter
         for widget in self.scroll_container.winfo_children(): widget.destroy()
         self.card_widgets.clear()
@@ -505,7 +521,6 @@ class EbwiseView(ctk.CTkFrame):
                 btn_copy_email.configure(command=lambda t=email, b=btn_copy_email: copy_to_clipboard(t, b))
                 btn_copy_email.pack(side="left")
 
-    # --- REORDERING CONTROL ---
     def _toggle_reorder_mode(self):
         self.is_reorder_mode = not self.is_reorder_mode
         self.selected_item_type = None
@@ -564,12 +579,18 @@ class EbwiseView(ctk.CTkFrame):
 
     # --- SCREEN 2: DYNAMIC MOODLE SECTIONS & DETAILS ---
     def render_course_details(self, course: dict):
+        code, title = parse_course_title(course.get("fullname", "Course Details"))
+        cid = str(course.get("id") or code)
+        self.active_course_id = cid
+
         for widget in self.scroll_container.winfo_children(): widget.destroy()
 
-        code, title = parse_course_title(course.get("fullname", "Course Details"))
+        top_bar = ctk.CTkFrame(self.scroll_container, fg_color="transparent", height=40)
+        top_bar.pack(fill="x", pady=(0, 10))
+        top_bar.pack_propagate(False)
 
-        breadcrumb_frame = ctk.CTkFrame(self.scroll_container, fg_color="transparent")
-        breadcrumb_frame.pack(fill="x", pady=(0, 10))
+        breadcrumb_frame = ctk.CTkFrame(top_bar, fg_color="transparent")
+        breadcrumb_frame.pack(side="left", fill="y")
 
         dash_btn = ctk.CTkLabel(breadcrumb_frame, text="Dashboard", font=ctk.CTkFont(size=13, weight="bold"),
                                 text_color=THEME["accent_indigo"], cursor="hand2")
@@ -578,6 +599,17 @@ class EbwiseView(ctk.CTkFrame):
 
         ctk.CTkLabel(breadcrumb_frame, text=f"  /  {code}", font=ctk.CTkFont(size=13),
                      text_color=THEME["text_secondary"]).pack(side="left")
+
+        right_header = ctk.CTkFrame(top_bar, fg_color="transparent")
+        right_header.pack(side="right", fill="y")
+
+        self.sync_btn = ctk.CTkButton(
+            right_header, text="↻ Refresh", width=100, height=32,
+            fg_color=THEME["card_bg"], hover_color=THEME["border_hover"], text_color=THEME["text_primary"],
+            border_width=1, border_color=THEME["border"], font=ctk.CTkFont(size=12, weight="bold"),
+            command=self.refresh_data
+        )
+        self.sync_btn.pack(side="right", pady=4)
 
         hero_card = ctk.CTkFrame(self.scroll_container, fg_color="transparent", border_width=0)
         hero_card.pack(fill="x", pady=(0, 20))

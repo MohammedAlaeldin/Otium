@@ -26,6 +26,7 @@ THEME = {
     "border_hover": "#6366F1",
     "text_primary": "#F1F5F9",
     "text_secondary": "#94A3B8",
+    "text_muted": "#4B4B66",
     "accent_indigo": "#6366F1",
     "danger": "#EF4444",
     "success": "#10B981",
@@ -78,53 +79,68 @@ class HomeView(ctk.CTkFrame):
         self.feed_col = ctk.CTkFrame(self.body_container, fg_color="transparent")
         self.feed_col.pack(side="left", fill="both", expand=True, padx=(0, 10))
 
-        self.filter_frame = ctk.CTkFrame(self.feed_col, fg_color="transparent")
-        self.filter_frame.pack(fill="x", pady=(0, 12))
+        # --- Top Bar matching ebwise_view layout ---
+        self.top_bar = ctk.CTkFrame(self.feed_col, fg_color="transparent", height=50)
+        self.top_bar.pack(fill="x", pady=(0, 12))
+        self.top_bar.pack_propagate(False)
+
+        left_header = ctk.CTkFrame(self.top_bar, fg_color="transparent")
+        left_header.pack(side="left", fill="y")
 
         ctk.CTkLabel(
-            self.filter_frame,
+            left_header,
             text="Recent Activity",
             font=ctk.CTkFont(size=18, weight="bold"),
             text_color=THEME["text_primary"]
         ).pack(side="left", padx=(0, 15))
 
-        # Localized Loading Indicator
-        self.loading_indicator = ctk.CTkProgressBar(self.filter_frame, mode="indeterminate", width=80, height=4,
-                                                    fg_color=THEME["bg_dark"])
+        # Center Tabs for Filters
+        self.center_tabs = ctk.CTkFrame(self.top_bar, fg_color="transparent")
+        self.center_tabs.place(relx=0.5, rely=0.5, anchor="center")
 
-        # Illuminated Toggle Filter Pills
         self.btn_outlook = ctk.CTkButton(
-            self.filter_frame, text="Outlook", width=80, height=28, corner_radius=14,
+            self.center_tabs, text="Outlook", width=80, height=28, corner_radius=14,
             font=ctk.CTkFont(size=12, weight="bold"), command=lambda: self.toggle_filter("Outlook")
         )
         self.btn_outlook.pack(side="left", padx=4)
 
         self.btn_teams = ctk.CTkButton(
-            self.filter_frame, text="Teams", width=80, height=28, corner_radius=14,
+            self.center_tabs, text="Teams", width=80, height=28, corner_radius=14,
             font=ctk.CTkFont(size=12, weight="bold"), command=lambda: self.toggle_filter("Teams")
         )
         self.btn_teams.pack(side="left", padx=4)
 
         self.btn_ebwise = ctk.CTkButton(
-            self.filter_frame, text="eBwise", width=80, height=28, corner_radius=14,
+            self.center_tabs, text="eBwise", width=80, height=28, corner_radius=14,
             font=ctk.CTkFont(size=12, weight="bold"), command=lambda: self.toggle_filter("eBwise")
         )
         self.btn_ebwise.pack(side="left", padx=4)
 
-        # Clean Assignments Toggle Button (Just an Arrow)
+        # Right Header for Actions (Sync & Panel Toggle)
+        right_header = ctk.CTkFrame(self.top_bar, fg_color="transparent")
+        right_header.pack(side="right", fill="y")
+
+        self.sync_btn = ctk.CTkButton(
+            right_header, text="↻ Refresh", width=100, height=32,
+            fg_color=THEME["card_bg"], hover_color=THEME["border_hover"], text_color=THEME["text_primary"],
+            border_width=1, border_color=THEME["border"], font=ctk.CTkFont(size=12, weight="bold"),
+            command=self.refresh_data
+        )
+        self.sync_btn.pack(side="left", pady=9, padx=(0, 10))
+
         self.toggle_assignments_btn = ctk.CTkButton(
-            self.filter_frame, text="▶", width=30, height=28, corner_radius=14,
+            right_header, text="▶", width=30, height=28, corner_radius=14,
             font=ctk.CTkFont(size=14, weight="bold"), fg_color="transparent", text_color=THEME["text_secondary"],
             hover_color=THEME["card_hover"], command=self.toggle_assignments_panel
         )
-        self.toggle_assignments_btn.pack(side="right", padx=(10, 0))
+        self.toggle_assignments_btn.pack(side="left", pady=11)
 
         self.update_filter_button_styles()
 
         self.feed_scroll = ctk.CTkScrollableFrame(self.feed_col, fg_color="transparent")
         self.feed_scroll.pack(fill="both", expand=True)
 
-        # Right Column: Assignments Panel (Fully Hideable)
+        # Right Column: Assignments Panel
         self.assign_col = ctk.CTkFrame(self.body_container, width=320, fg_color=THEME["card_bg"], corner_radius=10,
                                        border_width=1, border_color=THEME["border"])
         self.assign_col.pack(side="right", fill="y")
@@ -156,12 +172,10 @@ class HomeView(ctk.CTkFrame):
         self.assign_scroll = ctk.CTkScrollableFrame(self.assign_col, fg_color="transparent")
         self.assign_scroll.pack(fill="both", expand=True, padx=5, pady=(0, 5))
 
-        # Snapshot cache loading before fetching fresh data
         self.load_snapshot()
         self.refresh_data()
 
     def load_snapshot(self):
-        """Instantly load cached data so the UI doesn't appear empty while fetching."""
         cached_data = get_cached_home_data()
         if cached_data.get("feed") or cached_data.get("assignments"):
             self._update_ui(cached_data, is_snapshot=True)
@@ -200,8 +214,8 @@ class HomeView(ctk.CTkFrame):
             self.assign_col.pack_forget()
 
     def refresh_data(self):
-        self.loading_indicator.pack(side="left", padx=10)
-        self.loading_indicator.start()
+        if hasattr(self, "sync_btn"):
+            self.sync_btn.configure(state="disabled", text="Syncing...")
         threading.Thread(target=self._worker_fetch, daemon=True).start()
 
     def _worker_fetch(self):
@@ -224,8 +238,8 @@ class HomeView(ctk.CTkFrame):
 
     def _update_ui(self, data, is_snapshot=False):
         if not is_snapshot:
-            self.loading_indicator.stop()
-            self.loading_indicator.pack_forget()
+            if hasattr(self, "sync_btn"):
+                self.sync_btn.configure(state="normal", text="↻ Refresh")
             threading.Thread(target=save_cached_home_data, args=(data,), daemon=True).start()
 
         live = data.get("live_meeting")
@@ -274,13 +288,8 @@ class HomeView(ctk.CTkFrame):
 
         if item["source"] == "eBwise" and item.get("course_tag"):
             badge = ctk.CTkLabel(
-                source_frame,
-                text=item["course_tag"],
-                font=ctk.CTkFont(size=10, weight="bold"),
-                fg_color=THEME["accent_indigo"],
-                text_color="#FFFFFF",
-                corner_radius=4,
-                height=16
+                source_frame, text=item["course_tag"], font=ctk.CTkFont(size=10, weight="bold"),
+                fg_color=THEME["accent_indigo"], text_color="#FFFFFF", corner_radius=4, height=16
             )
             badge.pack(side="left", padx=(8, 0))
 
@@ -291,7 +300,6 @@ class HomeView(ctk.CTkFrame):
 
         ctk.CTkLabel(top_row, text=time_str, font=ctk.CTkFont(size=10), text_color=THEME["text_secondary"]).pack(
             side="right")
-
         ctk.CTkLabel(card, text=item["title"], font=ctk.CTkFont(size=14, weight="bold"),
                      text_color=THEME["text_primary"], anchor="w").pack(fill="x", padx=12, pady=(2, 0))
 
@@ -308,7 +316,6 @@ class HomeView(ctk.CTkFrame):
         def on_click(e):
             dismiss_notification(item["id"])
             card.destroy()
-
             src = item["source"]
             payload = {}
             if src == "Outlook":
@@ -317,10 +324,8 @@ class HomeView(ctk.CTkFrame):
                 self._navigate_to_view("Outlook", payload)
             elif src == "Teams":
                 payload = {
-                    "type": item.get("type"),
-                    "chat_id": item.get("chat_id"),
-                    "team_id": item.get("team_id"),
-                    "channel_id": item.get("channel_id"),
+                    "type": item.get("type"), "chat_id": item.get("chat_id"),
+                    "team_id": item.get("team_id"), "channel_id": item.get("channel_id"),
                     "chat_title": item.get("chat_title")
                 }
                 self._navigate_to_view("Teams", payload)
@@ -346,22 +351,36 @@ class HomeView(ctk.CTkFrame):
         if isinstance(due_date, str):
             due_date = _parse_flexible_datetime(due_date)
 
-        time_left = due_date - now
+        is_missed = due_date < now
+        time_left = due_date - now if not is_missed else now - due_date
+
         days = time_left.days
         hours = math.floor(time_left.seconds / 3600)
 
-        if days == 0 and hours < 24:
+        # Style based on deadline proximity/missed state
+        if is_missed:
+            color = THEME["text_muted"]
+            countdown_text = "Missed Deadline"
+            border_col = THEME["border"]
+            title_color = THEME["text_muted"]
+        elif days == 0 and hours < 24:
             color = THEME["danger"]
             countdown_text = f"Due in {hours}h" if hours > 0 else "Due within 1 hour!"
+            border_col = color
+            title_color = THEME["text_primary"]
         elif days <= 3:
             color = THEME["warning"]
             countdown_text = f"Due in {days}d {hours}h"
+            border_col = color
+            title_color = THEME["text_primary"]
         else:
             color = THEME["success"]
             countdown_text = f"Due in {days} days"
+            border_col = color
+            title_color = THEME["text_primary"]
 
         card = ctk.CTkFrame(self.assign_scroll, fg_color=THEME["bg_dark"], corner_radius=8, border_width=1,
-                            border_color=color)
+                            border_color=border_col)
         card.pack(fill="x", pady=5, padx=5)
 
         header_row = ctk.CTkFrame(card, fg_color="transparent")
@@ -370,35 +389,43 @@ class HomeView(ctk.CTkFrame):
         ctk.CTkLabel(header_row, text=countdown_text, font=ctk.CTkFont(size=11, weight="bold"), text_color=color,
                      anchor="w").pack(side="left")
 
-        if assign.get("is_custom"):
+        # Allow removing custom tasks OR standard tasks that were missed
+        if assign.get("is_custom") or is_missed:
             del_btn = ctk.CTkButton(
-                header_row, text="✕", width=20, height=20, fg_color="transparent", text_color=THEME["danger"],
-                hover_color=THEME["card_bg"], command=lambda tid=assign["id"]: self._delete_custom_task(tid)
+                header_row, text="✕", width=20, height=20, fg_color="transparent",
+                text_color=THEME["danger"] if not is_missed else THEME["text_muted"],
+                hover_color=THEME["card_bg"], command=lambda a=assign: self._remove_assignment(a)
             )
             del_btn.pack(side="right")
 
         ctk.CTkLabel(card, text=assign["title"], font=ctk.CTkFont(size=13, weight="bold"),
-                     text_color=THEME["text_primary"], anchor="w", wraplength=250).pack(fill="x", padx=10)
-        ctk.CTkLabel(card, text=assign["course"], font=ctk.CTkFont(size=11), text_color=THEME["text_secondary"],
+                     text_color=title_color, anchor="w", wraplength=250).pack(fill="x", padx=10)
+        ctk.CTkLabel(card, text=assign["course"], font=ctk.CTkFont(size=11),
+                     text_color=THEME["text_secondary"] if not is_missed else THEME["text_muted"],
                      anchor="w", wraplength=250).pack(fill="x", padx=10, pady=(0, 8))
 
-        if assign.get("url"):
+        if assign.get("url") and not is_missed:
             card.configure(cursor="hand2")
             for w in [card] + card.winfo_children():
+                if isinstance(w, ctk.CTkButton): continue
                 w.bind("<Button-1>", lambda e, u=assign["url"]: ebwise_backend.open_ebwise_url_authenticated(u))
 
-    def _delete_custom_task(self, task_id: str):
-        delete_custom_task(task_id)
-        self.refresh_tasks_only()
+    def _remove_assignment(self, assign):
+        if assign.get("is_custom"):
+            delete_custom_task(assign["id"])
+        else:
+            dismiss_notification(assign["id"])
+
+        self.current_assignments = [a for a in self.current_assignments if a["id"] != assign["id"]]
+        self._render_assignments()
 
     def refresh_tasks_only(self):
         custom_tasks = get_custom_tasks()
-        now = datetime.now()
-
         new_assigns = [a for a in self.current_assignments if not a.get("is_custom")]
+
         for task in custom_tasks:
             due_dt = _parse_flexible_datetime(task.get("due_date"))
-            if due_dt and due_dt >= now:
+            if due_dt:
                 new_assigns.append({
                     "id": task.get("id"),
                     "title": task.get("title"),
@@ -422,9 +449,7 @@ class HomeView(ctk.CTkFrame):
         modal.grab_set()
 
         ctk.CTkLabel(
-            modal,
-            text="Create Assigned Task",
-            font=ctk.CTkFont(size=16, weight="bold"),
+            modal, text="Create Assigned Task", font=ctk.CTkFont(size=16, weight="bold"),
             text_color=THEME["text_primary"]
         ).pack(pady=(15, 10))
 
@@ -469,10 +494,6 @@ class HomeView(ctk.CTkFrame):
                 status_lbl.configure(text="Invalid format! Use YYYY-MM-DD and HH:MM")
 
         ctk.CTkButton(
-            modal,
-            text="Add Task",
-            fg_color=THEME["accent_indigo"],
-            hover_color=THEME["border_hover"],
-            font=ctk.CTkFont(weight="bold"),
-            command=save
+            modal, text="Add Task", fg_color=THEME["accent_indigo"], hover_color=THEME["border_hover"],
+            font=ctk.CTkFont(weight="bold"), command=save
         ).pack(pady=15)

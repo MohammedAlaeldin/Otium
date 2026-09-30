@@ -1,8 +1,8 @@
 import os
 import threading
 import customtkinter as ctk
-import storage
 
+import storage
 from views.home_view import HomeView
 from views.outlook_view import OutlookView
 from views.teams_view import TeamsView
@@ -10,6 +10,7 @@ from views.ebwise_view import EbwiseView
 
 from ebwise_backend import fetch_ebwise_data
 from storage import clear_all_saved_data
+from auto_login import run_daily_login
 
 THEME = {
     "bg_dark": "#121216",
@@ -70,11 +71,9 @@ class DashboardWindow(ctk.CTkFrame):
         self.body = ctk.CTkFrame(self, corner_radius=0, fg_color=THEME["bg_dark"])
         self.body.pack(fill="both", expand=True, side="bottom")
 
-        # Container occupies full width permanently (avoids view reflow on toggle)
         self.container = ctk.CTkFrame(self.body, corner_radius=0, fg_color="transparent")
         self.container.pack(fill="both", expand=True)
 
-        # Overlay Sidebar (placed absolutely over body without affecting container)
         self.sidebar = ctk.CTkFrame(self.body, width=self.sidebar_width, corner_radius=0, fg_color=THEME["header_bg"],
                                     border_color=THEME["border"], border_width=1)
 
@@ -91,11 +90,9 @@ class DashboardWindow(ctk.CTkFrame):
         self.refresh_live_data()
 
     def toggle_sidebar(self):
-        """Flips sidebar visibility using absolute placement to bypass layout reflows."""
         if self.sidebar_visible:
             self.sidebar.place_forget()
         else:
-            # CustomTkinter forbids setting width/height inside place()
             self.sidebar.place(x=0, y=0, relheight=1.0)
             self.sidebar.tkraise()
         self.sidebar_visible = not self.sidebar_visible
@@ -109,9 +106,9 @@ class DashboardWindow(ctk.CTkFrame):
 
     def _worker_fetch_data(self, classification: str, selected_filter: str):
         data = fetch_ebwise_data(classification=classification)
-        self.after(0, lambda: self._update_ui_with_data(data, selected_filter=selected_filter))
+        self.after(0, lambda: self._update_ui_with_data(data, classification, selected_filter))
 
-    def _update_ui_with_data(self, data: dict, selected_filter: str = "In Progress"):
+    def _update_ui_with_data(self, data: dict, classification: str, selected_filter: str):
         status = data.get("status")
 
         if status == "SUCCESS":
@@ -119,7 +116,34 @@ class DashboardWindow(ctk.CTkFrame):
             if ebwise_view and hasattr(ebwise_view, "update_data"):
                 ebwise_view.update_data(data, selected_filter=selected_filter)
         elif status == "EXPIRED":
-            self.logout()
+            self._handle_session_expired(classification, selected_filter)
+
+    def _handle_session_expired(self, classification: str, selected_filter: str):
+        """Silently re-authenticate in the background instead of crashing out of the app."""
+        print("⚠️ Session expired detected in Dashboard! Initiating silent re-auth...")
+        old_title = self.title_label.cget("text")
+        self.title_label.configure(text=f"{old_title} (Renewing Session...)")
+
+        def _bg_reauth():
+            creds = storage.load_credentials()
+            if not creds:
+                self.after(0, self.logout)
+                return
+
+            status = run_daily_login(creds)
+
+            def _on_reauth_done():
+                self.title_label.configure(text=old_title)
+                if status == "SUCCESS":
+                    print("✅ Silent re-auth successful. Re-fetching data...")
+                    self.refresh_live_data(classification=classification, selected_filter=selected_filter)
+                else:
+                    print("❌ Silent re-auth failed. Logging out.")
+                    self.logout()
+
+            self.after(0, _on_reauth_done)
+
+        threading.Thread(target=_bg_reauth, daemon=True).start()
 
     def _build_sidebar_menu(self):
         nav_items = ["Home", "Ebwise", "Outlook", "Teams"]
@@ -156,7 +180,6 @@ class DashboardWindow(ctk.CTkFrame):
         logout_btn.pack(fill="x", padx=10, pady=20)
 
     def show_view(self, view_name: str, payload: dict = None):
-        """Switches active view and dismisses sidebar cleanly."""
         self.title_label.configure(text=view_name)
 
         for name, btn in self.sidebar_buttons.items():

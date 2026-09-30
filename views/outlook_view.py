@@ -5,8 +5,9 @@ import sys
 import re
 import json
 import ssl
+import webbrowser
 from tkinter import filedialog, messagebox
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any
 import customtkinter as ctk
 
 try:
@@ -14,7 +15,6 @@ try:
 except AttributeError:
     pass
 
-# Requires: pip install tkinterweb
 from tkinterweb import HtmlFrame
 
 try:
@@ -24,6 +24,7 @@ except ImportError:
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from outlook_backend import OutlookBackend
+from ebwise_backend import open_ebwise_url_authenticated
 
 THEME = {
     "bg_dark": "#121216",
@@ -39,7 +40,6 @@ THEME = {
     "lock_red": "#EF4444"
 }
 
-# Unified Tab styling used across the app
 UNIFIED_TAB_COLORS = {
     "selected_color": "#4F46E5",
     "selected_hover_color": "#4338CA",
@@ -218,12 +218,10 @@ class OutlookView(ctk.CTkFrame):
             pass
 
     def _build_main_layout(self):
-        # Unified Top Bar Container
         self.top_bar = ctk.CTkFrame(self, fg_color="transparent", height=50)
         self.top_bar.pack(fill="x", side="top", padx=20, pady=(15, 10))
         self.top_bar.pack_propagate(False)
 
-        # Left: Title and Compose
         self.top_left = ctk.CTkFrame(self.top_bar, fg_color="transparent")
         self.top_left.pack(side="left", fill="y")
 
@@ -246,7 +244,6 @@ class OutlookView(ctk.CTkFrame):
         )
         self.compose_btn.pack(side="left", pady=9)
 
-        # Center: Tabs (Absolute placement guarantees dead center)
         self.folder_tabs = ctk.CTkSegmentedButton(
             self.top_bar, values=["Inbox"], command=self.switch_folder,
             height=34, font=ctk.CTkFont(size=13, weight="bold"),
@@ -254,7 +251,6 @@ class OutlookView(ctk.CTkFrame):
         )
         self.folder_tabs.place(relx=0.5, rely=0.5, anchor="center")
 
-        # Right: Search and Refresh
         self.top_right = ctk.CTkFrame(self.top_bar, fg_color="transparent")
         self.top_right.pack(side="right", fill="y")
 
@@ -390,9 +386,9 @@ class OutlookView(ctk.CTkFrame):
         self.load_data(is_load_more=False)
 
     def load_data(self, is_load_more=False):
+        self.sync_btn.configure(state="disabled", text="Syncing...")
         if not is_load_more:
             self.current_skip = 0
-            self.sync_btn.configure(state="disabled", text="Syncing...")
             for w in self.list_pane.winfo_children(): w.destroy()
             ctk.CTkLabel(self.list_pane, text="⏳ Syncing mailbox...", text_color=THEME["text_secondary"]).pack(pady=40)
         else:
@@ -497,6 +493,18 @@ class OutlookView(ctk.CTkFrame):
         self.rp_subject.configure(text=msg.get("subject", "(No Subject)"))
         self.render_email_thread(msg)
 
+    def _handle_email_link_click(self, url, *args, **kwargs):
+        if not url or url.startswith("about:") or url.startswith("data:"):
+            return False
+
+        url_lower = url.lower()
+        if "ebwise.mmu.edu.my" in url_lower or "teams.microsoft.com" in url_lower:
+            open_ebwise_url_authenticated(url)
+        else:
+            webbrowser.open(url)
+
+        return False
+
     def render_email_thread(self, root_msg):
         for w in self.thread_container.winfo_children(): w.destroy()
 
@@ -519,13 +527,11 @@ class OutlookView(ctk.CTkFrame):
             plain_text = re.sub(r'<[^>]+>', ' ', html_block)
             plain_text = re.sub(r'\s+', ' ', plain_text)
 
-            # Securely default to the backend data
             sender = root_msg.get("sender_name", "Unknown")
             date_str = root_msg.get("time", "Unknown Date")
             to_recipients = root_msg.get("to_recipients", [])
             to_str = ", ".join(to_recipients) if to_recipients else "Undisclosed"
 
-            # Parse reply headers only if they exist; preserve backend data if missing
             match = re.search(r'(?:From|De):\s*(.*?)\s*(?:Sent|Date):\s*(.*?)\s*(?:To|A):\s*(.*?)\s*(?:Subject|Cc):',
                               plain_text, re.IGNORECASE)
             if match:
@@ -533,7 +539,6 @@ class OutlookView(ctk.CTkFrame):
                 date_str = match.group(2).strip() or date_str
                 to_str = match.group(3).strip() or to_str
 
-            # Aggressively strip the embedded "From/Sent/To/Subject" boilerplate from the HTML view
             clean_html = re.sub(
                 r'(?i)(?:<div[^>]*>|<p[^>]*>|<span[^>]*>)?\s*(?:<b>|<strong>|<span[^>]*>)?From:\s*.*?(?:Sent|Date):\s*.*?To:\s*.*?Subject:\s*.*?(?:</div>|</p>|<br\s*/?>|<hr>){1,3}',
                 '', html_block, count=1, flags=re.DOTALL
@@ -565,7 +570,6 @@ class OutlookView(ctk.CTkFrame):
                               font=ctk.CTkFont(size=16, weight="bold"))
         avatar.pack(side="left", anchor="n")
 
-        # --- COLLAPSIBLE INFO FRAME ---
         info_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
         info_frame.pack(side="left", fill="x", expand=True, padx=12)
 
@@ -573,18 +577,15 @@ class OutlookView(ctk.CTkFrame):
                                   text_color=THEME["text_primary"], anchor="w", cursor="hand2")
         sender_lbl.pack(anchor="w")
 
-        # Truncated string for collapsed view
         short_to = (to_str[:35] + "...") if len(to_str) > 35 else to_str
         to_lbl_collapsed = ctk.CTkLabel(info_frame, text=f"To: {short_to} ▼", font=ctk.CTkFont(size=11),
                                         text_color=THEME["text_muted"], anchor="w", cursor="hand2")
         to_lbl_collapsed.pack(anchor="w")
 
-        # Expanded Details Frame
         details_frame = ctk.CTkFrame(info_frame, fg_color="transparent")
         ctk.CTkLabel(details_frame, text=f"From: {sender_name} <{sender_email}>",
                      font=ctk.CTkFont(size=11), text_color=THEME["text_secondary"], anchor="w").pack(anchor="w")
 
-        # Use a scrolling textbox so massive "To" lists don't break the UI layout
         to_textbox = ctk.CTkTextbox(details_frame, height=55, fg_color="transparent",
                                     text_color=THEME["text_secondary"],
                                     wrap="word", font=ctk.CTkFont(size=11))
@@ -602,12 +603,10 @@ class OutlookView(ctk.CTkFrame):
 
         sender_lbl.bind("<Button-1>", toggle_details)
         to_lbl_collapsed.bind("<Button-1>", toggle_details)
-        # ------------------------------
 
         right_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
         right_frame.pack(side="right", anchor="n")
 
-        # The date string will now always render properly
         ctk.CTkLabel(right_frame, text=date_str, font=ctk.CTkFont(size=13, weight="bold"),
                      text_color=THEME["text_primary"]).pack(anchor="e", pady=(0, 4))
 
@@ -638,7 +637,13 @@ class OutlookView(ctk.CTkFrame):
         html_container.pack(fill="both", expand=True, padx=15, pady=(5, 12))
         html_container.pack_propagate(False)
 
-        box = HtmlFrame(html_container, messages_enabled=False)
+        try:
+            box = HtmlFrame(html_container, on_link_click=self._handle_email_link_click)
+        except TypeError:
+            box = HtmlFrame(html_container)
+            if hasattr(box, "on_link_click"):
+                box.on_link_click(self._handle_email_link_click)
+
         box.pack(fill="both", expand=True)
 
         injected_css_and_html = f"""
@@ -660,6 +665,7 @@ class OutlookView(ctk.CTkFrame):
         </html>
         """
         box.load_html(injected_css_and_html)
+
     def load_attachments_ui(self, msg_id, parent_frame):
         lbl = ctk.CTkLabel(parent_frame, text="⏳ Checking for attachments...", text_color=THEME["text_secondary"])
         lbl.pack(pady=2, anchor="w")
@@ -669,12 +675,26 @@ class OutlookView(ctk.CTkFrame):
                 atts = self.backend.fetch_attachments_metadata(msg_id)
                 self.after(0, lambda: self.render_attachments_metadata(msg_id, atts, lbl, parent_frame))
             except Exception as e:
-                self.after(0, lambda: lbl.configure(text=f"⚠️ Error: {e}", text_color=THEME["lock_red"]))
+                def set_err():
+                    try:
+                        if lbl.winfo_exists():
+                            lbl.configure(text=f"⚠️ Error: {e}", text_color=THEME["lock_red"])
+                    except Exception:
+                        pass
+
+                self.after(0, set_err)
 
         threading.Thread(target=bg_fetch, daemon=True).start()
 
     def render_attachments_metadata(self, msg_id, atts, loading_lbl, parent_frame):
-        loading_lbl.destroy()
+        try:
+            if not parent_frame.winfo_exists():
+                return
+            if loading_lbl.winfo_exists():
+                loading_lbl.destroy()
+        except Exception:
+            return
+
         if not atts:
             return
 
@@ -702,6 +722,11 @@ class OutlookView(ctk.CTkFrame):
             btn.pack(expand=True, fill="both")
 
     def download_and_open_attachment(self, msg_id, att_id, name, content_type, card):
+        try:
+            if not card.winfo_exists(): return
+        except Exception:
+            return
+
         for w in card.winfo_children(): w.destroy()
         ctk.CTkLabel(card, text="⏳ Fetching...", text_color=THEME["accent_indigo"]).pack(expand=True)
 
@@ -710,12 +735,23 @@ class OutlookView(ctk.CTkFrame):
                 path = self.backend.download_single_attachment(msg_id, att_id, tempfile.gettempdir())
                 self.after(0, lambda: self._show_attachment_preview(path, name, content_type, card))
             except Exception as e:
-                self.after(0, lambda err=str(e): ctk.CTkLabel(card, text="⚠️ Error", text_color=THEME["lock_red"]).pack(
-                    expand=True))
+                def set_err():
+                    try:
+                        if card.winfo_exists():
+                            ctk.CTkLabel(card, text="⚠️ Error", text_color=THEME["lock_red"]).pack(expand=True)
+                    except Exception:
+                        pass
+
+                self.after(0, set_err)
 
         threading.Thread(target=_bg, daemon=True).start()
 
     def _show_attachment_preview(self, path, name, content_type, card):
+        try:
+            if not card.winfo_exists(): return
+        except Exception:
+            return
+
         for w in card.winfo_children(): w.destroy()
         is_image = content_type.startswith("image/") or name.lower().endswith(
             (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))
@@ -734,8 +770,7 @@ class OutlookView(ctk.CTkFrame):
 
         ext = name.split(".")[-1].upper() if "." in name else "FILE"
         ctk.CTkButton(card, text=f"📄 {ext} File\nOpen {name[:8]}", fg_color="transparent",
-                      hover_color=THEME["border_hover"], command=lambda: os.startfile(path)).pack(expand=True,
-                                                                                                  fill="both")
+                      hover_color=THEME["border_hover"], command=lambda: os.startfile(path)).pack(expand=True, fill="both")
 
     def execute_search(self, event=None):
         query = self.search_entry.get().strip()
@@ -743,7 +778,7 @@ class OutlookView(ctk.CTkFrame):
             self.load_data(is_load_more=False)
             return
 
-        self.sync_btn.configure(state="disabled")
+        self.sync_btn.configure(state="disabled", text="Syncing...")
         for w in self.list_pane.winfo_children(): w.destroy()
         ctk.CTkLabel(self.list_pane, text=f"🔍 Searching for '{query}'...", text_color=THEME["text_secondary"]).pack(
             pady=40)
@@ -755,6 +790,6 @@ class OutlookView(ctk.CTkFrame):
             except Exception as e:
                 self.after(0, lambda err=str(e): self._show_error_ui(err))
             finally:
-                self.after(0, lambda: self.sync_btn.configure(state="normal"))
+                self.after(0, lambda: self.sync_btn.configure(state="normal", text="↻ Refresh"))
 
         threading.Thread(target=_bg_search, daemon=True).start()

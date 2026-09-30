@@ -10,8 +10,7 @@ from teams_backend import fetch_dashboard_data, fetch_channel_messages
 
 
 def _parse_flexible_datetime(dt_input):
-    if not dt_input:
-        return None
+    if not dt_input: return None
     if isinstance(dt_input, datetime):
         return dt_input.astimezone().replace(tzinfo=None)
 
@@ -20,10 +19,8 @@ def _parse_flexible_datetime(dt_input):
     clean_str = dt_str.split(".")[0].replace("Z", "").replace("+00:00", "")
 
     parsed_dt = None
-    formats = [
-        "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
-        "%Y-%m-%d %I:%M %p", "%Y-%m-%d %I:%M:%S %p"
-    ]
+    formats = ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%Y-%m-%d %I:%M %p",
+               "%Y-%m-%d %I:%M:%S %p"]
     for fmt in formats:
         try:
             parsed_dt = datetime.strptime(clean_str, fmt)
@@ -32,8 +29,7 @@ def _parse_flexible_datetime(dt_input):
             pass
 
     if parsed_dt:
-        if is_utc:
-            parsed_dt = parsed_dt.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+        if is_utc: parsed_dt = parsed_dt.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
         return parsed_dt
     return None
 
@@ -141,8 +137,7 @@ def get_home_data() -> dict:
 
                     time_raw = msg.get("time")
                     msg_time = _parse_flexible_datetime(time_raw)
-                    if not msg_time:
-                        msg_time = now
+                    if not msg_time: msg_time = now
 
                     if msg_time >= forty_eight_hours_ago:
                         sender_name = msg.get("sender_name")
@@ -157,14 +152,10 @@ def get_home_data() -> dict:
                                 sender_name = "Unknown"
 
                         results["feed"].append({
-                            "id": notif_key,
-                            "source": "Outlook",
-                            "title": msg.get("subject") or "(No Subject)",
-                            "subtitle": f"From: {sender_name}",
-                            "time": msg_time,
+                            "id": notif_key, "source": "Outlook", "title": msg.get("subject") or "(No Subject)",
+                            "subtitle": f"From: {sender_name}", "time": msg_time,
                             "url": f"https://outlook.office.com/mail/inbox/id/{msg_id}",
-                            "type": "email",
-                            "msg_id": msg_id,
+                            "type": "email", "msg_id": msg_id,
                             "preview": msg.get("preview") or msg.get("bodyPreview") or ""
                         })
         except Exception as e:
@@ -189,13 +180,9 @@ def get_home_data() -> dict:
                     notif_key = f"teams_call_{call.get('subject')}_{st_local.timestamp()}"
                     if notif_key not in dismissed:
                         results["feed"].append({
-                            "id": notif_key,
-                            "source": "Teams",
-                            "title": call.get("subject", "Teams Call"),
-                            "subtitle": "Scheduled Call / Online Meeting",
-                            "time": st_local,
-                            "url": call.get("join_url", ""),
-                            "type": "meeting"
+                            "id": notif_key, "source": "Teams", "title": call.get("subject", "Teams Call"),
+                            "subtitle": "Scheduled Call / Online Meeting", "time": st_local,
+                            "url": call.get("join_url", ""), "type": "meeting"
                         })
 
             for chat in td.get("chats", []):
@@ -205,21 +192,14 @@ def get_home_data() -> dict:
                 last_msg = chat.get("last_message", "")
 
                 notif_key = f"teams_chat_{chat_id}"
-
                 raw_time = chat.get("time")
                 chat_time = _parse_flexible_datetime(raw_time) if raw_time else (now - timedelta(minutes=15))
 
                 if notif_key not in dismissed and last_msg and last_msg != "No recent messages...":
                     results["feed"].append({
-                        "id": notif_key,
-                        "source": "Teams",
-                        "title": f"Chat: {chat_title}",
-                        "subtitle": f"{sender}: {last_msg}",
-                        "time": chat_time,
-                        "url": "",
-                        "type": "chat",
-                        "chat_id": chat_id,
-                        "chat_title": chat_title
+                        "id": notif_key, "source": "Teams", "title": f"Chat: {chat_title}",
+                        "subtitle": f"{sender}: {last_msg}", "time": chat_time, "url": "",
+                        "type": "chat", "chat_id": chat_id, "chat_title": chat_title
                     })
 
             for team in td.get("teams", []):
@@ -236,15 +216,10 @@ def get_home_data() -> dict:
                                 notif_key = f"teams_chan_{team_id}_{chan_id}_{c_time.timestamp()}"
                                 if notif_key not in dismissed:
                                     results["feed"].append({
-                                        "id": notif_key,
-                                        "source": "Teams",
+                                        "id": notif_key, "source": "Teams",
                                         "title": f"[{team_name} > {chan_name}] {cmsg.get('sender')}",
-                                        "subtitle": cmsg.get("content", "")[:120],
-                                        "time": c_time,
-                                        "url": "",
-                                        "type": "channel_post",
-                                        "team_id": team_id,
-                                        "channel_id": chan_id
+                                        "subtitle": cmsg.get("content", "")[:120], "time": c_time, "url": "",
+                                        "type": "channel_post", "team_id": team_id, "channel_id": chan_id
                                     })
                     except Exception:
                         pass
@@ -269,19 +244,20 @@ def get_home_data() -> dict:
                 ts = ev.get("timesort")
                 ev_time = datetime.fromtimestamp(ts)
 
-                # Check when the assignment was actually posted/modified by the teacher
                 time_modified_ts = ev.get("timemodified", ts)
                 time_modified = datetime.fromtimestamp(time_modified_ts)
 
                 url = ev.get("url", "")
                 course_name = ev.get("course", {}).get("fullname", "eBwise Course")
                 name = ev.get("name", "Assignment")
+
                 notif_key = f"ebwise_event_{ev.get('id', ts)}"
+                assign_id = f"ebwise_assign_{ev.get('id', ts)}"
 
                 if ev_time >= now:
-                    # 1. Always add to upcoming tasks panel
+                    # Unconditional render for upcoming non-dismissed tasks
                     results["assignments"].append({
-                        "id": f"ebwise_assign_{ev.get('id', ts)}",
+                        "id": assign_id,
                         "title": name,
                         "course": course_name,
                         "due_date": ev_time,
@@ -290,41 +266,36 @@ def get_home_data() -> dict:
                         "is_custom": False
                     })
 
-                    # 2. Check if the assignment was freshly posted in the last 48 hours
                     if time_modified >= forty_eight_hours_ago:
                         new_notif_key = f"{notif_key}_newly_posted"
                         if new_notif_key not in dismissed:
                             results["feed"].append({
-                                "id": new_notif_key,
-                                "source": "eBwise",
-                                "title": f"New Assignment Posted: {name}",
-                                "subtitle": course_name,
-                                "time": time_modified,
-                                "url": url,
-                                "type": "assignment"
+                                "id": new_notif_key, "source": "eBwise", "title": f"New Assignment Posted: {name}",
+                                "subtitle": course_name, "time": time_modified, "url": url, "type": "assignment"
                             })
 
-                    # 3. Check if the deadline is approaching quickly (next 7 days)
                     if ev_time <= now + timedelta(days=7) and notif_key not in dismissed:
                         results["feed"].append({
-                            "id": notif_key,
-                            "source": "eBwise",
-                            "title": f"Upcoming Deadline: {name}",
-                            "subtitle": course_name,
-                            "time": now,
-                            "url": url,
-                            "type": "assignment"
+                            "id": notif_key, "source": "eBwise", "title": f"Upcoming Deadline: {name}",
+                            "subtitle": course_name, "time": now, "url": url, "type": "assignment"
                         })
                 elif ev_time >= thirty_days_ago:
+                    # Conditionally add MISSED tasks so they appear greyed out and can be dismissed
+                    if assign_id not in dismissed:
+                        results["assignments"].append({
+                            "id": assign_id,
+                            "title": name,
+                            "course": course_name,
+                            "due_date": ev_time,
+                            "url": url,
+                            "source": "eBwise",
+                            "is_custom": False
+                        })
+
                     if notif_key not in dismissed:
                         results["feed"].append({
-                            "id": notif_key,
-                            "source": "eBwise",
-                            "title": f"Deadline Passed: {name}",
-                            "subtitle": course_name,
-                            "time": ev_time,
-                            "url": url,
-                            "type": "assignment"
+                            "id": notif_key, "source": "eBwise", "title": f"Deadline Passed: {name}",
+                            "subtitle": course_name, "time": ev_time, "url": url, "type": "assignment"
                         })
 
             try:
@@ -344,20 +315,13 @@ def get_home_data() -> dict:
                         if n_time >= thirty_days_ago:
                             raw_subject = n.get("subject", "Notification")
                             c_tag = raw_subject.split(" ")[0] if " - " in raw_subject else ""
-
                             results["feed"].append({
-                                "id": notif_key,
-                                "source": "eBwise",
-                                "course_tag": c_tag,
-                                "title": n.get("subject", "Notification"),
-                                "subtitle": n.get("shortenedsubject", ""),
-                                "time": n_time,
-                                "url": n.get("contexturl", ""),
-                                "type": "notification"
+                                "id": notif_key, "source": "eBwise", "course_tag": c_tag,
+                                "title": n.get("subject", "Notification"), "subtitle": n.get("shortenedsubject", ""),
+                                "time": n_time, "url": n.get("contexturl", ""), "type": "notification"
                             })
             except Exception as e:
                 print(f"HomeBackend - Notification fetch failed: {e}")
-
         except Exception as e:
             print(f"HomeBackend - eBwise fetch skipped: {e}")
 
@@ -366,9 +330,10 @@ def get_home_data() -> dict:
         executor.submit(fetch_teams)
         executor.submit(fetch_ebwise)
 
+    # Process all custom tasks
     for task in get_custom_tasks():
         due_dt = _parse_flexible_datetime(task.get("due_date"))
-        if due_dt and due_dt >= now:
+        if due_dt:
             results["assignments"].append({
                 "id": task.get("id"),
                 "title": task.get("title"),
