@@ -128,6 +128,7 @@ class TeamsView(ctk.CTkFrame):
 
         self.current_tab = "Chats"
         self.current_open_chat = None
+        self.all_chats = []
 
         self.top_bar = ctk.CTkFrame(self, fg_color="transparent", height=50)
         self.top_bar.grid(row=0, column=0, sticky="ew", padx=20, pady=(15, 10))
@@ -155,7 +156,7 @@ class TeamsView(ctk.CTkFrame):
 
         self.notice_label = ctk.CTkLabel(
             self.top_right,
-            text="‼️ IMPORTANT: After opening, if prompted to 'Open in Microsoft Teams', click Cancel,\nthen select 'Use the web app instead'.",
+            text="‼ IMPORTANT: After opening, if prompted to 'Open in Microsoft Teams', click Cancel,\nthen select 'Use the web app instead'.",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#EAB308",
             justify="right"
@@ -256,11 +257,25 @@ class TeamsView(ctk.CTkFrame):
         self.view_chats.grid_columnconfigure(1, weight=3)
         self.view_chats.grid_rowconfigure(0, weight=1)
 
+        self.chat_left_container = ctk.CTkFrame(self.view_chats, fg_color="transparent")
+        self.chat_left_container.grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=0)
+        self.chat_left_container.grid_columnconfigure(0, weight=1)
+        self.chat_left_container.grid_rowconfigure(0, weight=0)
+        self.chat_left_container.grid_rowconfigure(1, weight=1)
+
+        self.chat_search_entry = ctk.CTkEntry(
+            self.chat_left_container, placeholder_text="🔍 Search chat names...", height=34,
+            font=ctk.CTkFont(size=12), fg_color=THEME["card_bg"], border_color=THEME["border"],
+            text_color=THEME["text_primary"]
+        )
+        self.chat_search_entry.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.chat_search_entry.bind("<KeyRelease>", self._filter_chats)
+
         self.chat_list_frame = ctk.CTkScrollableFrame(
-            self.view_chats, fg_color="transparent",
+            self.chat_left_container, fg_color="transparent",
             scrollbar_button_color=THEME["border"], scrollbar_button_hover_color=THEME["border_hover"]
         )
-        self.chat_list_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=0)
+        self.chat_list_frame.grid(row=1, column=0, sticky="nsew")
 
         self.chat_right_container = ctk.CTkFrame(self.view_chats, fg_color="transparent")
         self.chat_right_container.grid(row=0, column=1, sticky="nsew", padx=(10, 0), pady=0)
@@ -313,17 +328,22 @@ class TeamsView(ctk.CTkFrame):
         self.after(0, lambda: self._render_ui(data))
 
     def _render_error_diagnostics(self, frame, errors, debug_info):
-        card = ctk.CTkFrame(frame, fg_color=THEME["error_bg"], border_color="#7F1D1D", border_width=1, corner_radius=10)
-        card.pack(fill="x", padx=10, pady=10, ipady=8)
+        card = ctk.CTkFrame(frame, fg_color=THEME["card_bg"], border_color=THEME["border"], border_width=1, corner_radius=10)
+        card.pack(fill="x", padx=10, pady=15, ipady=10)
 
-        ctk.CTkLabel(card, text="⚠️ Diagnostics / Errors Detected", font=ctk.CTkFont(weight="bold", size=14),
-                     text_color="#FCA5A5").pack(pady=5)
-        status = f"Graph Token Captured: {debug_info.get('has_graph')}\nSkype Token Captured: {debug_info.get('has_skype')}"
-        ctk.CTkLabel(card, text=status, text_color="#FECACA", font=ctk.CTkFont(size=11)).pack(pady=2)
+        ctk.CTkLabel(card, text="🔌 Connection Error", font=ctk.CTkFont(weight="bold", size=15),
+                     text_color=THEME["text_primary"]).pack(pady=(10, 5))
 
-        for err in errors:
-            ctk.CTkLabel(card, text=f"• {err}", justify="left", wraplength=350, text_color=THEME["error_text"],
-                         font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=2)
+        ctk.CTkLabel(card, text="We couldn't connect to Microsoft Teams.\nPlease check your internet connection and refresh.",
+                     font=ctk.CTkFont(size=12), text_color=THEME["text_secondary"], justify="center").pack(pady=5)
+
+        refresh_btn = ctk.CTkButton(
+            card, text="↻ Refresh Now", width=120, height=32,
+            fg_color=THEME["accent_indigo"], hover_color=THEME["accent_hover"], text_color=THEME["text_primary"],
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self.load_data
+        )
+        refresh_btn.pack(pady=(5, 10))
 
     def _render_ui(self, data: dict):
         if hasattr(self, "refresh_btn"):
@@ -356,40 +376,15 @@ class TeamsView(ctk.CTkFrame):
                 )
                 team_card.pack(fill="x", pady=6, padx=4)
 
-        chats = data.get("chats", [])
-        if not chats:
+        self.all_chats = data.get("chats", [])
+        if not self.all_chats:
             if errors:
                 self._render_error_diagnostics(self.chat_list_frame, errors, debug_info)
             else:
                 ctk.CTkLabel(self.chat_list_frame, text="No recent chats found.",
                              text_color=THEME["text_secondary"]).pack(pady=30)
         else:
-            for chat in chats:
-                clean_title = chat['title'].replace('\n', ' ')[:28]
-                clean_msg = chat['last_message'].replace('\n', ' ')[:36]
-
-                card = ctk.CTkFrame(self.chat_list_frame, fg_color=THEME["card_bg"], border_color=THEME["border"],
-                                    border_width=1, corner_radius=10, cursor="hand2")
-                card.pack(fill="x", pady=4, padx=4)
-
-                content = ctk.CTkFrame(card, fg_color="transparent")
-                content.pack(fill="both", expand=True, padx=12, pady=10)
-
-                title_lbl = ctk.CTkLabel(content, text=f"💬 {clean_title}", font=ctk.CTkFont(size=13, weight="bold"),
-                                         text_color=THEME["text_primary"], anchor="w")
-                title_lbl.pack(fill="x")
-
-                msg_lbl = ctk.CTkLabel(content, text=f"{clean_msg}...", font=ctk.CTkFont(size=11),
-                                       text_color=THEME["text_secondary"], anchor="w")
-                msg_lbl.pack(fill="x", pady=(2, 0))
-
-                open_chat = lambda e, c=chat: self._show_chat_messages(c)
-                for w in (card, content, title_lbl, msg_lbl):
-                    w.bind("<Button-1>", open_chat)
-                    w.bind("<Enter>", lambda e, c=card: c.configure(fg_color=THEME["card_hover"],
-                                                                    border_color=THEME["border_hover"]))
-                    w.bind("<Leave>",
-                           lambda e, c=card: c.configure(fg_color=THEME["card_bg"], border_color=THEME["border"]))
+            self._render_chat_list(self.all_chats)
 
         calls = data.get("calls", [])
         now_utc = datetime.now(timezone.utc)
@@ -526,6 +521,54 @@ class TeamsView(ctk.CTkFrame):
                      text_color=THEME["text_secondary"]).pack(pady=50)
         ctk.CTkLabel(self.chat_messages_frame, text="Select a chat conversation on the left to view messages.",
                      text_color=THEME["text_secondary"]).pack(pady=50)
+
+    def _filter_chats(self, event=None):
+        query = self.chat_search_entry.get().strip().lower()
+        if not query:
+            self._render_chat_list(self.all_chats)
+            return
+
+        filtered_chats = [
+            c for c in self.all_chats
+            if query in c.get('title', '').lower() or query in c.get('sender', '').lower()
+        ]
+        self._render_chat_list(filtered_chats)
+
+    def _render_chat_list(self, chats_to_render):
+        for child in self.chat_list_frame.winfo_children():
+            child.destroy()
+
+        if not chats_to_render:
+            ctk.CTkLabel(self.chat_list_frame, text="No chats match your search.",
+                         text_color=THEME["text_secondary"]).pack(pady=30)
+            return
+
+        for chat in chats_to_render:
+            clean_title = chat.get('title', '').replace('\n', ' ')[:28]
+            clean_msg = chat.get('last_message', '').replace('\n', ' ')[:36]
+
+            card = ctk.CTkFrame(self.chat_list_frame, fg_color=THEME["card_bg"], border_color=THEME["border"],
+                                border_width=1, corner_radius=10, cursor="hand2")
+            card.pack(fill="x", pady=4, padx=4)
+
+            content = ctk.CTkFrame(card, fg_color="transparent")
+            content.pack(fill="both", expand=True, padx=12, pady=10)
+
+            title_lbl = ctk.CTkLabel(content, text=f"💬 {clean_title}", font=ctk.CTkFont(size=13, weight="bold"),
+                                     text_color=THEME["text_primary"], anchor="w")
+            title_lbl.pack(fill="x")
+
+            msg_lbl = ctk.CTkLabel(content, text=f"{clean_msg}...", font=ctk.CTkFont(size=11),
+                                   text_color=THEME["text_secondary"], anchor="w")
+            msg_lbl.pack(fill="x", pady=(2, 0))
+
+            open_chat = lambda e, c=chat: self._show_chat_messages(c)
+            for w in (card, content, title_lbl, msg_lbl):
+                w.bind("<Button-1>", open_chat)
+                w.bind("<Enter>", lambda e, c=card: c.configure(fg_color=THEME["card_hover"],
+                                                                border_color=THEME["border_hover"]))
+                w.bind("<Leave>", lambda e, c=card: c.configure(fg_color=THEME["card_bg"], border_color=THEME["border"]))
+
 
     def _show_channel_content(self, team, channel):
         for child in self.channel_content_frame.winfo_children(): child.destroy()
