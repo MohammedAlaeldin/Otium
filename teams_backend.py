@@ -36,27 +36,27 @@ class TeamsBackend:
             return {"text": "", "quote_sender": "", "quote_text": ""}
 
         quote_match = re.search(
-            r'<(?:quote|blockquote)[^>]*>(.*?)</(?:quote|blockquote)>', 
-            raw_content, 
+            r'<(?:quote|blockquote)[^>]*>(.*?)</(?:quote|blockquote)>',
+            raw_content,
             re.DOTALL | re.IGNORECASE
         )
 
         if quote_match:
             full_quote_html = quote_match.group(0)
             inner_quote_html = quote_match.group(1)
-            
+
             reply_raw = raw_content.replace(full_quote_html, "").strip()
-            
+
             sender_match = (
-                re.search(r'authorname=["\']([^"\']+)["\']', full_quote_html, re.IGNORECASE) or
-                re.search(r'author=["\']([^"\']+)["\']', full_quote_html, re.IGNORECASE) or
-                re.search(r'<strong[^>]*>(.*?)</strong>', inner_quote_html, re.IGNORECASE) or
-                re.search(r'<b[^>]*>(.*?)</b>', inner_quote_html, re.IGNORECASE)
+                    re.search(r'authorname=["\']([^"\']+)["\']', full_quote_html, re.IGNORECASE) or
+                    re.search(r'author=["\']([^"\']+)["\']', full_quote_html, re.IGNORECASE) or
+                    re.search(r'<strong[^>]*>(.*?)</strong>', inner_quote_html, re.IGNORECASE) or
+                    re.search(r'<b[^>]*>(.*?)</b>', inner_quote_html, re.IGNORECASE)
             )
-            
+
             quote_sender = self._clean_text(sender_match.group(1)) if sender_match else "User"
             clean_quote = self._clean_text(inner_quote_html)
-            
+
             if quote_sender and clean_quote.startswith(quote_sender):
                 clean_quote = clean_quote[len(quote_sender):].strip()
 
@@ -443,6 +443,26 @@ class TeamsBackend:
             print(f"Channel Msg Fetch Exception: {e}")
         return []
 
+    def send_chat_message(self, chat_id: str, message_text: str) -> bool:
+        if not self.chat_svc_url or not self.skype_auth: return False
+        url = f"{self.chat_svc_url}/{chat_id}/messages"
+        headers = self._get_skype_headers()
+        payload = {
+            "content": message_text,
+            "messagetype": "Text",
+            "contenttype": "text"
+        }
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=15)
+            if res.status_code in [200, 201]:
+                return True
+            else:
+                print(f"❌ Send Msg Error {res.status_code}: {res.text}")
+                return False
+        except Exception as e:
+            print(f"❌ Send Msg Exception: {e}")
+            return False
+
 
 _teams_backend_instance = TeamsBackend()
 
@@ -453,5 +473,10 @@ def fetch_dashboard_data() -> dict: return _teams_backend_instance.fetch_dashboa
 def fetch_chat_history(chat_id: str) -> list: return _teams_backend_instance.fetch_chat_history(chat_id)
 
 
-def fetch_channel_messages(team_id: str, channel_id: str) -> list:
-    return _teams_backend_instance.fetch_channel_messages(team_id, channel_id)
+def fetch_channel_messages(team_id: str,
+                           channel_id: str) -> list: return _teams_backend_instance.fetch_channel_messages(team_id,
+                                                                                                           channel_id)
+
+
+def send_chat_message(chat_id: str, message_text: str) -> bool: return _teams_backend_instance.send_chat_message(
+    chat_id, message_text)

@@ -127,13 +127,12 @@ class TeamsView(ctk.CTkFrame):
         self.grid_rowconfigure(1, weight=1)
 
         self.current_tab = "Chats"
+        self.current_open_chat = None
 
-        # Unified Top Bar Container
         self.top_bar = ctk.CTkFrame(self, fg_color="transparent", height=50)
         self.top_bar.grid(row=0, column=0, sticky="ew", padx=20, pady=(15, 10))
         self.top_bar.grid_propagate(False)
 
-        # Left: Title
         self.top_left = ctk.CTkFrame(self.top_bar, fg_color="transparent")
         self.top_left.pack(side="left", fill="y")
 
@@ -143,7 +142,6 @@ class TeamsView(ctk.CTkFrame):
         )
         self.header_title.pack(side="left")
 
-        # Center: Tabs (Absolute placement guarantees dead center)
         self.tab_selector = ctk.CTkSegmentedButton(
             self.top_bar, values=["Channels", "Chats", "Calls"], command=self._on_tab_changed,
             height=34, font=ctk.CTkFont(size=13, weight="bold"),
@@ -152,20 +150,17 @@ class TeamsView(ctk.CTkFrame):
         self.tab_selector.place(relx=0.5, rely=0.5, anchor="center")
         self.tab_selector.set("Chats")
 
-       # Right: Refresh & Notice
         self.top_right = ctk.CTkFrame(self.top_bar, fg_color="transparent")
         self.top_right.pack(side="right", fill="y")
 
-        # --- NEW NOTICE LABEL ---
         self.notice_label = ctk.CTkLabel(
             self.top_right,
             text="‼️ IMPORTANT: After opening, if prompted to 'Open in Microsoft Teams', click Cancel,\nthen select 'Use the web app instead'.",
             font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#EAB308", # Warning Yellow
+            text_color="#EAB308",
             justify="right"
         )
         self.notice_label.pack(side="left", padx=(0, 15), pady=9)
-        # ------------------------
 
         self.refresh_btn = ctk.CTkButton(
             self.top_right, text="↻ Refresh", width=100, height=32,
@@ -219,7 +214,6 @@ class TeamsView(ctk.CTkFrame):
         self.current_tab = value
         self._show_active_tab(value)
 
-        # --- UPDATE NOTICE TEXT DYNAMICALLY ---
         if value in ["Channels", "Chats"]:
             self.notice_label.configure(
                 text="‼️ IMPORTANT: After opening, if prompted to 'Open in Microsoft Teams', click Cancel,\nthen select 'Use the web app instead'."
@@ -228,7 +222,6 @@ class TeamsView(ctk.CTkFrame):
             self.notice_label.configure(
                 text="‼️ IMPORTANT: When joining, if prompted, click Cancel ➔ 'Continue in this browser'.\nWhen asked for permissions, click 'Allow while visiting this site'."
             )
-        # --------------------------------------
 
     def _show_active_tab(self, tab_name: str):
         for view in (self.view_channels, self.view_chats, self.view_calls):
@@ -269,11 +262,22 @@ class TeamsView(ctk.CTkFrame):
         )
         self.chat_list_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=0)
 
+        self.chat_right_container = ctk.CTkFrame(self.view_chats, fg_color="transparent")
+        self.chat_right_container.grid(row=0, column=1, sticky="nsew", padx=(10, 0), pady=0)
+        self.chat_right_container.grid_columnconfigure(0, weight=1)
+        self.chat_right_container.grid_rowconfigure(0, weight=1)
+        self.chat_right_container.grid_rowconfigure(1, weight=0)
+
         self.chat_messages_frame = ctk.CTkScrollableFrame(
-            self.view_chats, fg_color="transparent",
+            self.chat_right_container, fg_color="transparent",
             scrollbar_button_color=THEME["border"], scrollbar_button_hover_color=THEME["border_hover"]
         )
-        self.chat_messages_frame.grid(row=0, column=1, sticky="nsew", padx=(10, 0), pady=0)
+        self.chat_messages_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
+
+        self.chat_input_frame = ctk.CTkFrame(
+            self.chat_right_container, height=60, fg_color=THEME["card_bg"],
+            border_color=THEME["border"], border_width=1, corner_radius=10
+        )
 
     def _setup_calls_layout(self):
         self.view_calls.grid_columnconfigure(0, weight=1)
@@ -286,6 +290,9 @@ class TeamsView(ctk.CTkFrame):
         self.calls_list_frame.grid(row=0, column=0, sticky="nsew", pady=0)
 
     def load_data(self):
+        if hasattr(self, "refresh_btn"):
+            self.refresh_btn.configure(state="disabled", text="Syncing...")
+
         for frame in [self.teams_list_frame, self.chat_list_frame, self.calls_list_frame, self.channel_content_frame,
                       self.chat_messages_frame]:
             for child in frame.winfo_children(): child.destroy()
@@ -319,6 +326,12 @@ class TeamsView(ctk.CTkFrame):
                          font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=2)
 
     def _render_ui(self, data: dict):
+        if hasattr(self, "refresh_btn"):
+            self.refresh_btn.configure(state="normal", text="↻ Refresh")
+
+        if hasattr(self, "chat_input_frame") and self.chat_input_frame.winfo_exists():
+            self.chat_input_frame.grid_forget()
+
         for frame in [self.teams_list_frame, self.chat_list_frame, self.calls_list_frame, self.channel_content_frame,
                       self.chat_messages_frame]:
             for child in frame.winfo_children(): child.destroy()
@@ -583,7 +596,7 @@ class TeamsView(ctk.CTkFrame):
                         open_btn = ctk.CTkButton(
                             hdr_row, text="↗ Open in Teams", width=100, height=24,
                             font=ctk.CTkFont(size=11, weight="bold"),
-                            fg_color="transparent", hover_color=THEME["border_hover"], 
+                            fg_color="transparent", hover_color=THEME["border_hover"],
                             text_color=THEME["text_secondary"],
                             command=lambda url=m['web_url']: open_in_browser(url)
                         )
@@ -623,17 +636,16 @@ class TeamsView(ctk.CTkFrame):
         threading.Thread(target=_load_posts, daemon=True).start()
 
     def _show_chat_messages(self, chat):
+        self.current_open_chat = chat
         for child in self.chat_messages_frame.winfo_children(): child.destroy()
 
         header_card = ctk.CTkFrame(self.chat_messages_frame, fg_color=THEME["card_bg"], border_color=THEME["border"],
                                    border_width=1, corner_radius=10)
         header_card.pack(fill="x", pady=(0, 15), ipady=5)
 
-        # Added side="left" to the title label
         ctk.CTkLabel(header_card, text=f"💬 {chat['title']}", font=ctk.CTkFont(size=18, weight="bold"),
                      text_color=THEME["text_primary"]).pack(side="left", anchor="w", padx=15, pady=10)
 
-        # --- ADD THIS NEW BUTTON BLOCK ---
         chat_url = f"https://teams.microsoft.com/l/chat/{chat['id']}/0"
         open_chat_btn = ctk.CTkButton(
             header_card, text="↗ Open in Teams", width=120, height=28,
@@ -643,7 +655,23 @@ class TeamsView(ctk.CTkFrame):
             command=lambda url=chat_url: open_in_browser(url)
         )
         open_chat_btn.pack(side="right", padx=15, pady=10)
-        # ---------------------------------
+
+        self.chat_input_frame.grid(row=1, column=0, sticky="ew")
+        for child in self.chat_input_frame.winfo_children(): child.destroy()
+
+        self.chat_input_entry = ctk.CTkEntry(
+            self.chat_input_frame, placeholder_text=f"Reply to {chat['title'][:15]}...",
+            height=40, fg_color=THEME["bg_dark"], border_color=THEME["border"], text_color=THEME["text_primary"]
+        )
+        self.chat_input_entry.pack(side="left", fill="x", expand=True, padx=(15, 10), pady=10)
+        self.chat_input_entry.bind("<Return>", lambda e: self._send_message())
+
+        self.chat_send_btn = ctk.CTkButton(
+            self.chat_input_frame, text="Send", width=80, height=40, font=ctk.CTkFont(weight="bold"),
+            fg_color=THEME["accent_indigo"], hover_color=THEME["accent_hover"],
+            command=self._send_message
+        )
+        self.chat_send_btn.pack(side="right", padx=(0, 15), pady=10)
 
         loading_lbl = ctk.CTkLabel(self.chat_messages_frame, text="⏳ Loading message history...",
                                    text_color=THEME["text_secondary"])
@@ -672,7 +700,6 @@ class TeamsView(ctk.CTkFrame):
                 ctk.CTkLabel(msg_card, text=m['sender'], font=ctk.CTkFont(weight="bold", size=12),
                              text_color=THEME["accent_indigo"], anchor="w").pack(fill="x", padx=12, pady=(10, 2))
 
-                # Render Quoted Reply if present
                 if m.get("quote_text"):
                     quote_box = ctk.CTkFrame(
                         msg_card,
@@ -701,9 +728,50 @@ class TeamsView(ctk.CTkFrame):
                         wraplength=450
                     ).pack(fill="x", padx=10, pady=(0, 6))
 
-                # Render Main Message Text
                 if m.get('content'):
-                    ctk.CTkLabel(msg_card, text=m['content'], font=ctk.CTkFont(size=13), text_color=THEME["text_primary"],
+                    ctk.CTkLabel(msg_card, text=m['content'], font=ctk.CTkFont(size=13),
+                                 text_color=THEME["text_primary"],
                                  anchor="w", justify="left", wraplength=480).pack(fill="x", padx=12, pady=(2, 10))
 
+            self.after(200, lambda: self.chat_messages_frame._parent_canvas.yview_moveto(1.0))
+
         threading.Thread(target=_load_history, daemon=True).start()
+
+    def _send_message(self):
+        if not hasattr(self, "current_open_chat") or not self.current_open_chat:
+            return
+
+        text = self.chat_input_entry.get().strip()
+        if not text:
+            return
+
+        self.chat_send_btn.configure(state="disabled", text="...")
+        self.chat_input_entry.configure(state="disabled")
+
+        chat_id = self.current_open_chat['id']
+
+        def _bg_send():
+            success = teams_backend.send_chat_message(chat_id, text)
+            self.after(0, lambda: self._on_message_sent(success, text))
+
+        threading.Thread(target=_bg_send, daemon=True).start()
+
+    def _on_message_sent(self, success, original_text):
+        if not self.chat_send_btn.winfo_exists(): return
+
+        self.chat_send_btn.configure(state="normal", text="Send")
+        self.chat_input_entry.configure(state="normal")
+
+        if success:
+            self.chat_input_entry.delete(0, "end")
+            self._show_chat_messages(self.current_open_chat)
+        else:
+            self.chat_input_entry.delete(0, "end")
+            self.chat_input_entry.insert(0, "⚠️ Error sending message...")
+
+            def _reset():
+                if self.chat_input_entry.winfo_exists():
+                    self.chat_input_entry.delete(0, "end")
+                    self.chat_input_entry.insert(0, original_text)
+
+            self.after(2000, _reset)

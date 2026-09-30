@@ -12,18 +12,18 @@ from auto_login import run_daily_login
 from dashboard import DashboardWindow
 from login_frontend import OtiumLoginApp
 
-# =============================================================
-# Ensure Playwright browser is installed for new users
-# =============================================================
+
+# Ensures Playwright browser is installed for new users
+
 try:
     subprocess.run(["playwright", "install", "chromium"], capture_output=True, check=False)
 except Exception:
     pass
 
-# =============================================================
+
 # Quick patch for CustomTkinter destroy bug on shutdown
-# This prevents the "AttributeError: '_font'" crash when closing
-# =============================================================
+# This prevents the "AttributeError: '_font'" crash when closing note: the app can work without it
+
 from customtkinter.windows.widgets.ctk_button import CTkButton
 
 _original_destroy = CTkButton.destroy
@@ -38,7 +38,7 @@ def _safe_destroy(self):
 
 
 CTkButton.destroy = _safe_destroy
-# =============================================================
+
 
 ctk.set_appearance_mode("Dark")
 
@@ -84,14 +84,14 @@ class AppController(ctk.CTk):
         self.geometry("900x650")
         self.minsize(700, 500)
 
-        # --- Set the Window Title Bar Icon ---
+        #  Set the icon of the window to the logo
         try:
             base_dir = os.path.dirname(os.path.abspath(__file__))
             ico_path = os.path.join(base_dir, "logo.ico")
             png_path = os.path.join(base_dir, "logo.png")
 
             if os.path.exists(ico_path):
-                # Windows natively prefers .ico files for window borders
+                # tries using the ico file
                 self.iconbitmap(ico_path)
             elif os.path.exists(png_path):
                 # Fallback to PNG, saving the reference to prevent garbage collection
@@ -104,11 +104,12 @@ class AppController(ctk.CTk):
 
         self.current_frame = None
 
-        # Start the auth check 50ms after the UI loads so the window appears instantly
+        # Start the auth check 50ms after the UI loads so the
+        # window appears instantly
         self.after(50, self.check_initial_auth_state)
 
     def check_initial_auth_state(self):
-        """Uses fast check first; falls back to Playwright login only when expired."""
+        """Uses fast check first; falls back to Playwright login only when the  session is expired."""
 
         # 1. Check existing session cookies directly via lightweight HTTP GET
         if check_cookie_session_fast():
@@ -123,6 +124,13 @@ class AppController(ctk.CTk):
 
         # 3. Refresh session via Playwright in a background thread
         self.show_loading_screen("Refreshing session...")
+
+
+
+
+
+
+
 
         def bg_auth():
             status = run_daily_login(creds)
