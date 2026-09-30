@@ -131,11 +131,6 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
             print("📧 Filling email field...")
             await email_field.fill(email)
             await page.get_by_role("button", name="Next").click()
-
-            email_error = page.locator("#usernameError")
-            if await email_error.is_visible(timeout=2500):
-                raise Exception("AUTH_FAILED: Invalid Email")
-
             await asyncio.sleep(2)
             break
         elif await password_field.is_visible():
@@ -152,15 +147,8 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
         print("🔑 Filling password field...")
         await password_field.fill(password)
         await page.get_by_role("button", name="Sign in").click()
-
-        pwd_error = page.locator("#passwordError")
-        if await pwd_error.is_visible(timeout=2500):
-            raise Exception("AUTH_FAILED: Invalid Password")
-
         await asyncio.sleep(2.5)
-    except Exception as e:
-        if "AUTH_FAILED" in str(e):
-            raise e
+    except Exception:
         if "ebwise.mmu.edu.my" in page.url and "login" not in page.url:
             return True
         else:
@@ -203,11 +191,6 @@ async def authenticate_with_credentials(page, email: str, password: str, totp_se
     await _try_check_persist_checkbox(page)
 
     await page.get_by_role("button", name="Verify").click()
-
-    totp_error = page.locator('#otcError')
-    if await totp_error.is_visible(timeout=2500):
-        raise Exception("AUTH_FAILED: Invalid TOTP")
-
     await asyncio.sleep(3)
 
     await handle_security_interrupts(page)
@@ -254,14 +237,34 @@ async def sync_outlook(context):
     except Exception as e:
         print(f"⚠️ Outlook sync warning: {e}")
 
+async def sync_clic(context):
+    print("⏳ [Async] Priming Clic portal session...")
+    try:
+        page = await context.new_page()
+        await page.goto("https://clic.mmu.edu.my/psp/csprd/?cmd=login", timeout=30000, wait_until="domcontentloaded")
+        
+        # Click the "Sign in with Microsoft" button to complete the SSO handshake
+        ms_btn = page.locator("text='Sign in with Microsoft'").or_(page.locator("a[href*='microsoft']")).first
+        if await ms_btn.is_visible(timeout=5000):
+            await ms_btn.click()
+            try:
+                await page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
+                
+        await asyncio.sleep(2)
+        print("✅ Clic portal authentication state primed.")
+        await page.close()
+    except Exception as e:
+        print(f"⚠️ Clic sync warning: {e}")
 
-async def run_daily_login_async(creds: dict) -> tuple[bool, str]:
+async def run_daily_login_async(creds: dict) -> bool:
     email = creds.get("email")
     password = creds.get("password")
     totp_secret = creds.get("totp_secret", "").replace(" ", "").strip()
 
     if not email or not password or not totp_secret:
-        return False, "AUTH_FAILED"
+        return False
 
     print("🚀 Starting daily auto-login process (Parallel Sync)...")
     async with async_playwright() as p:
@@ -302,39 +305,35 @@ async def run_daily_login_async(creds: dict) -> tuple[bool, str]:
             except Exception as e:
                 print(f"❌ Login sequence failed: {e}")
                 await browser.close()
-                if "AUTH_FAILED" in str(e):
-                    return False, "AUTH_FAILED"
-                return False, "NETWORK_ERROR"
+                return False
 
         # 3. Sync and Save
         if session_authenticated:
-            print("🌐 Synchronizing auth state with Microsoft Teams and Outlook concurrently...")
+            print("🌐 Synchronizing auth state with Microsoft Teams, Outlook, and Clic concurrently...")
             await asyncio.gather(
                 sync_teams(context),
-                sync_outlook(context)
+                sync_outlook(context),
+                sync_clic(context)
             )
 
             await context.storage_state(path=SESSION_FILE)
             await browser.close()
             print(f"💾 All sessions successfully updated and saved to {SESSION_FILE}!")
-            return True, "SUCCESS"
+            return True
 
         await browser.close()
-        return False, "NETWORK_ERROR"
+        return False
 
 
-def run_daily_login(creds: dict) -> str:
+def run_daily_login(creds: dict) -> bool:
     """Entry point with 3-retry network resilience logic."""
     for attempt in range(1, 4):
         print(f"🔄 Auto-login attempt {attempt}/3...")
         try:
             # Executes the async flow securely
-            success, status = asyncio.run(run_daily_login_async(creds))
+            success = asyncio.run(run_daily_login_async(creds))
             if success:
-                return "SUCCESS"
-            if status == "AUTH_FAILED":
-                print("❌ Bad credentials detected. Aborting retries.")
-                return "AUTH_FAILED"
+                return True
         except Exception as e:
             print(f"⚠️ Network or timeout error on attempt {attempt}: {e}")
 
@@ -343,4 +342,4 @@ def run_daily_login(creds: dict) -> str:
             time.sleep(5)
 
     print("❌ All 3 background login attempts failed. Routing to network error screen.")
-    return "NETWORK_ERROR"
+    return False
