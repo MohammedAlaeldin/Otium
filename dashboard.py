@@ -153,7 +153,7 @@ class DashboardWindow(ctk.CTkFrame):
             fg_color="transparent",
             text_color=THEME["danger"],
             hover_color="#3B1820",
-            command=self.logout
+            command=self.confirm_logout
         )
         logout_btn.pack(fill="x", padx=10, pady=20)
 
@@ -179,6 +179,62 @@ class DashboardWindow(ctk.CTkFrame):
 
             if payload and hasattr(active_view, "handle_navigation_payload"):
                 self.after(50, lambda: active_view.handle_navigation_payload(payload))
+
+    def confirm_logout(self):
+        """Displays a confirmation modal before executing the logout."""
+        if self.sidebar_visible:
+            self.toggle_sidebar()
+
+        modal = ctk.CTkToplevel(self)
+        modal.title("Confirm Logout")
+        modal.geometry("380x190")
+        modal.resizable(False, False)
+        modal.configure(fg_color=THEME["bg_dark"])
+        modal.transient(self.winfo_toplevel())
+        modal.grab_set()
+
+        # Center modal window relative to main window
+        modal.update_idletasks()
+        root = self.winfo_toplevel()
+        x = root.winfo_x() + (root.winfo_width() // 2) - (380 // 2)
+        y = root.winfo_y() + (root.winfo_height() // 2) - (190 // 2)
+        modal.geometry(f"+{x}+{y}")
+
+        card = ctk.CTkFrame(modal, fg_color=THEME["card_bg"], border_color=THEME["border"], border_width=1, corner_radius=12)
+        card.pack(fill="both", expand=True, padx=15, pady=15)
+
+        ctk.CTkLabel(
+            card, text="⚠️ Confirm Logout", font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=THEME["text_primary"]
+        ).pack(pady=(15, 4))
+
+        ctk.CTkLabel(
+            card, text="Are you sure you want to log out of Otium?",
+            font=ctk.CTkFont(size=12), text_color=THEME["text_secondary"]
+        ).pack(pady=(0, 15))
+
+        btn_frame = ctk.CTkFrame(card, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=15, pady=(0, 10))
+
+        cancel_btn = ctk.CTkButton(
+            btn_frame, text="Cancel", width=110, height=32,
+            fg_color=THEME["border"], hover_color=THEME["border_hover"],
+            text_color=THEME["text_primary"], font=ctk.CTkFont(size=12, weight="bold"),
+            command=modal.destroy
+        )
+        cancel_btn.pack(side="left", expand=True, padx=(0, 5))
+
+        def _do_logout():
+            modal.destroy()
+            self.logout()
+
+        logout_confirm_btn = ctk.CTkButton(
+            btn_frame, text="Log Out", width=110, height=32,
+            fg_color=THEME["danger"], hover_color="#B91C1C",
+            text_color="#FFFFFF", font=ctk.CTkFont(size=12, weight="bold"),
+            command=_do_logout
+        )
+        logout_confirm_btn.pack(side="right", expand=True, padx=(5, 0))
 
     def logout(self):
         clear_all_saved_data()

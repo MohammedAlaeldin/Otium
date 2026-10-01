@@ -238,7 +238,7 @@ class OutlookView(ctk.CTkFrame):
         ).pack(side="left", padx=(0, 15))
 
         self.compose_btn = ctk.CTkButton(
-            self.top_left, text="✏️ Compose", width=100, height=32,
+            self.top_left, text="✏️️ Compose", width=100, height=32,
             fg_color=THEME["accent_indigo"], hover_color=THEME["accent_hover"], font=ctk.CTkFont(weight="bold"),
             command=lambda: ComposeEmailModal(self, self.backend)
         )
@@ -498,7 +498,7 @@ class OutlookView(ctk.CTkFrame):
             return False
 
         url_lower = url.lower()
-        if "ebwise.mmu.edu.my" in url_lower or "teams.microsoft.com" in url_lower:
+        if any(domain in url_lower for domain in ["ebwise", "teams", "clic", ".pdf"]):
             open_ebwise_url_authenticated(url)
         else:
             webbrowser.open(url)

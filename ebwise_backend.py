@@ -279,7 +279,7 @@ def _launch_playwright_browser(url: str):
             page.goto(url)
             page.wait_for_event("close", timeout=0)
     except Exception:
-        webbrowser.open(url)
+        pass
 
 
 def open_ebwise_url_authenticated(url: str) -> bool:

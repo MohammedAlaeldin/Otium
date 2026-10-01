@@ -1,89 +1,143 @@
-import customtkinter as ctk
 import threading
 import asyncio
 import re
-from schedule_backend import fetch_raw_schedule
+import customtkinter as ctk
+import schedule_backend
 
 THEME = {
     "bg_dark": "#121216",
     "card_bg": "#1E1E2A",
+    "card_hover": "#262638",
     "card_alt": "#171721",
+    "header_bg": "#181822",
     "header_blue": "#1E3A8A",
     "border": "#323246",
+    "border_hover": "#4B4B66",
     "text_primary": "#F1F5F9",
     "text_secondary": "#94A3B8",
     "accent_indigo": "#6366F1",
+    "accent_hover": "#4F46E5",
+    "error_text": "#FFA3A3",
     "danger": "#EF4444"
 }
 
 DAYS_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
+
 class ScheduleView(ctk.CTkFrame):
     def __init__(self, parent):
         super().__init__(parent, fg_color=THEME["bg_dark"])
-        self.pack_propagate(False)
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        self.top_bar = ctk.CTkFrame(self, fg_color="transparent", height=50)
+        self.top_bar.grid(row=0, column=0, sticky="ew", padx=20, pady=(15, 10))
+        self.top_bar.grid_propagate(False)
 
         self.header_title = ctk.CTkLabel(
-            self, text="📅 Class Schedule", font=ctk.CTkFont(size=22, weight="bold"), text_color=THEME["text_primary"]
+            self.top_bar, text="Schedule", font=ctk.CTkFont(size=22, weight="bold"),
+            text_color=THEME["text_primary"]
         )
-        self.header_title.pack(anchor="w", padx=20, pady=15)
+        self.header_title.pack(side="left")
 
-        self.table_frame = ctk.CTkScrollableFrame(
-            self, fg_color=THEME["card_bg"], border_color=THEME["border"], border_width=1, corner_radius=0
+        self.refresh_btn = ctk.CTkButton(
+            self.top_bar, text="↻ Refresh", width=100, height=32,
+            fg_color=THEME["card_bg"], hover_color=THEME["border_hover"], text_color=THEME["text_primary"],
+            border_width=1, border_color=THEME["border"], font=ctk.CTkFont(size=12, weight="bold"),
+            command=self.load_data
         )
-        self.table_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        self.refresh_btn.pack(side="right", pady=9)
 
-        self.loading_lbl = ctk.CTkLabel(
-            self.table_frame,
-            text="⏳ Launching background browser to extract Clic schedule...",
-            text_color=THEME["text_secondary"],
-            font=ctk.CTkFont(size=14)
+        self.schedule_list_frame = ctk.CTkScrollableFrame(
+            self, fg_color="transparent",
+            scrollbar_button_color=THEME["border"], scrollbar_button_hover_color=THEME["border_hover"]
         )
-        self.loading_lbl.pack(pady=50)
+        self.schedule_list_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 20))
 
-        self.load_schedule()
+        self.load_data()
 
-    def load_schedule(self):
-        def fetch():
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                res = loop.run_until_complete(fetch_raw_schedule())
-                self.after(0, lambda: self.render_table(res))
-            except Exception as e:
-                self.after(0, lambda: self.render_table({"error": str(e)}))
-        threading.Thread(target=fetch, daemon=True).start()
+    def load_data(self):
+        if hasattr(self, "refresh_btn"):
+            self.refresh_btn.configure(state="disabled", text="Syncing...")
 
-    def render_table(self, result):
-        for w in self.table_frame.winfo_children():
-            w.destroy()
+        for child in self.schedule_list_frame.winfo_children():
+            child.destroy()
+
+        ctk.CTkLabel(
+            self.schedule_list_frame, text="⏳ Launching background browser to extract Clic schedule...",
+            font=ctk.CTkFont(size=14),
+            text_color=THEME["text_secondary"]
+        ).pack(pady=40)
+
+        threading.Thread(target=self._fetch_and_render, daemon=True).start()
+
+    def _fetch_and_render(self):
+        try:
+            # Create a new event loop inside the background thread for Playwright
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            res = loop.run_until_complete(schedule_backend.fetch_raw_schedule())
+            self.after(0, lambda: self._render_ui(res))
+        except Exception as e:
+            self.after(0, lambda: self._render_ui({"error": str(e)}))
+
+    def _render_error(self, frame, error_msg=None):
+        for child in frame.winfo_children():
+            child.destroy()
+
+        card = ctk.CTkFrame(frame, fg_color=THEME["card_bg"], border_color=THEME["border"], border_width=1,
+                            corner_radius=10)
+        card.pack(fill="x", padx=10, pady=15, ipady=10)
+
+        ctk.CTkLabel(card, text="🔌 Sync Needed / Connection Issue", font=ctk.CTkFont(weight="bold", size=15),
+                     text_color=THEME["text_primary"]).pack(pady=(15, 5))
+
+        msg = "Unable to connect or fetch your schedule right now.\nPlease click refresh below to try sync again."
+        if error_msg and "No scheduled events found" not in error_msg:
+            msg += f"\n\nDetails: {error_msg}"
+
+        ctk.CTkLabel(card, text=msg, font=ctk.CTkFont(size=12), text_color=THEME["text_secondary"],
+                     justify="center").pack(pady=5)
+
+        refresh_btn = ctk.CTkButton(
+            card, text="↻ Please Refresh", width=140, height=32,
+            fg_color=THEME["accent_indigo"], hover_color=THEME["accent_hover"], text_color=THEME["text_primary"],
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self.load_data
+        )
+        refresh_btn.pack(pady=(10, 15))
+
+    def _render_ui(self, result: dict):
+        if hasattr(self, "refresh_btn"):
+            self.refresh_btn.configure(state="normal", text="↻ Refresh")
+
+        for child in self.schedule_list_frame.winfo_children():
+            child.destroy()
 
         if "error" in result:
-            ctk.CTkLabel(
-                self.table_frame, text=f"❌ Error: {result['error']}", text_color=THEME["danger"], font=ctk.CTkFont(size=14)
-            ).pack(pady=50)
+            self._render_error(self.schedule_list_frame, result["error"])
             return
 
         raw_data = result.get("data", "")
         classes = self.parse_data(raw_data)
 
         if not classes:
-            ctk.CTkLabel(
-                self.table_frame, text="No classes found in schedule.", text_color=THEME["text_secondary"], font=ctk.CTkFont(size=14)
-            ).pack(pady=50)
+            self._render_error(self.schedule_list_frame, "No scheduled events found.")
             return
 
-        self.table_frame.grid_columnconfigure(0, weight=1)
-        self.table_frame.grid_columnconfigure(1, weight=1)
-        self.table_frame.grid_columnconfigure(2, weight=2)
-        self.table_frame.grid_columnconfigure(3, weight=1)
-        self.table_frame.grid_columnconfigure(4, weight=3)
+        self.schedule_list_frame.grid_columnconfigure(0, weight=1)
+        self.schedule_list_frame.grid_columnconfigure(1, weight=1)
+        self.schedule_list_frame.grid_columnconfigure(2, weight=2)
+        self.schedule_list_frame.grid_columnconfigure(3, weight=1)
+        self.schedule_list_frame.grid_columnconfigure(4, weight=3)
 
         headers = ["Day", "Time", "Subject Code", "Session", "Venue"]
 
         for col_idx, col_name in enumerate(headers):
             cell = ctk.CTkFrame(
-                self.table_frame, fg_color=THEME["header_blue"], corner_radius=0, border_width=1, border_color=THEME["border"]
+                self.schedule_list_frame, fg_color=THEME["header_blue"], corner_radius=0, border_width=1,
+                border_color=THEME["border"]
             )
             cell.grid(row=0, column=col_idx, sticky="nsew")
 
@@ -106,7 +160,8 @@ class ScheduleView(ctk.CTkFrame):
 
             for col_idx, text in enumerate(row_data):
                 cell = ctk.CTkFrame(
-                    self.table_frame, fg_color=bg_color, corner_radius=0, border_color=THEME["border"], border_width=1
+                    self.schedule_list_frame, fg_color=bg_color, corner_radius=0, border_color=THEME["border"],
+                    border_width=1
                 )
                 cell.grid(row=row_idx, column=col_idx, sticky="nsew")
 
@@ -116,7 +171,8 @@ class ScheduleView(ctk.CTkFrame):
                 )
 
                 lbl = ctk.CTkLabel(
-                    cell, text=text, font=ctk.CTkFont(size=12, weight=font_weight), text_color=text_col, anchor="w", justify="left"
+                    cell, text=text, font=ctk.CTkFont(size=12, weight=font_weight), text_color=text_col, anchor="w",
+                    justify="left"
                 )
                 lbl.pack(padx=12, pady=12, fill="x", expand=True)
 
@@ -126,7 +182,7 @@ class ScheduleView(ctk.CTkFrame):
 
         current_day = ""
         i = 0
-        
+
         days_pattern = re.compile(r"^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)", re.IGNORECASE)
         time_pattern = re.compile(r"^(\d{1,2}:\d{2}\s*(?:AM|PM)?)", re.IGNORECASE)
 

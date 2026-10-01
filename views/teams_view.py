@@ -656,19 +656,31 @@ class TeamsView(ctk.CTkFrame):
                         att_frame.pack(fill="x", padx=12, pady=(0, 10))
 
                         for att in attachments:
-                            file_row = ctk.CTkFrame(att_frame, fg_color=THEME["header_bg"], corner_radius=6)
+                            # Add border, border_width, and cursor="hand2" to make it look clickable
+                            file_row = ctk.CTkFrame(att_frame, fg_color=THEME["header_bg"],
+                                                    border_color=THEME["border"], border_width=1, corner_radius=6,
+                                                    cursor="hand2")
                             file_row.pack(fill="x", pady=2)
 
-                            ctk.CTkLabel(file_row, text=f"📎 {att.get('name', 'Attachment')}", font=ctk.CTkFont(size=12),
-                                         text_color=THEME["text_primary"]).pack(side="left", padx=10, pady=8)
+                            # Assign the label to a variable so we can bind events to it
+                            lbl = ctk.CTkLabel(file_row, text=f"📎 {att.get('name', 'Attachment')}",
+                                               font=ctk.CTkFont(size=12),
+                                               text_color=THEME["text_primary"])
+                            lbl.pack(side="left", padx=10, pady=8)
 
-                            btn = ctk.CTkButton(
-                                file_row, text="Open File", width=80, height=26,
-                                font=ctk.CTkFont(size=11, weight="bold"),
-                                fg_color=THEME["accent_indigo"], hover_color=THEME["accent_hover"],
-                                command=lambda url=att['url']: open_in_browser(url)
-                            )
-                            btn.pack(side="right", padx=10, pady=8)
+                            # Define the open action
+                            action = lambda e, url=att['url']: open_in_browser(url)
+
+                            # Bind the click action to both the frame and the label
+                            for element in (file_row, lbl):
+                                element.bind("<Button-1>", action)
+
+                            # Bind the hover effect to change background and border colors
+                            file_row.bind("<Enter>", lambda e, fr=file_row: fr.configure(fg_color="#222232",
+                                                                                         border_color=THEME[
+                                                                                             "border_hover"]))
+                            file_row.bind("<Leave>", lambda e, fr=file_row: fr.configure(fg_color=THEME["header_bg"],
+                                                                                         border_color=THEME["border"])) 
                     else:
                         ctk.CTkFrame(msg_card, fg_color="transparent", height=6).pack(fill="x")
             except Exception as e:
