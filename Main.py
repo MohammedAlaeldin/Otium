@@ -6,24 +6,17 @@ import subprocess
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from storage import SESSION_FILE
 import storage
+
+# CRITICAL: Set the custom Playwright browser path before any other modules load it.
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(storage.get_app_dir(), "pw-browsers")
+
+from storage import SESSION_FILE
 from auto_login import run_daily_login
 from dashboard import DashboardWindow
 from login_frontend import OtiumLoginApp
 
-
-# Ensures Playwright browser is installed for new users
-
-try:
-    subprocess.run(["playwright", "install", "chromium"], capture_output=True, check=False)
-except Exception:
-    pass
-
-
 # Quick patch for CustomTkinter destroy bug on shutdown
-# This prevents the "AttributeError: '_font'" crash when closing note: the app can work without it
-
 from customtkinter.windows.widgets.ctk_button import CTkButton
 
 _original_destroy = CTkButton.destroy
@@ -38,8 +31,6 @@ def _safe_destroy(self):
 
 
 CTkButton.destroy = _safe_destroy
-
-
 ctk.set_appearance_mode("Dark")
 
 
@@ -84,17 +75,14 @@ class AppController(ctk.CTk):
         self.geometry("900x650")
         self.minsize(700, 500)
 
-        #  Set the icon of the window to the logo
         try:
             base_dir = os.path.dirname(os.path.abspath(__file__))
             ico_path = os.path.join(base_dir, "logo.ico")
             png_path = os.path.join(base_dir, "logo.png")
 
             if os.path.exists(ico_path):
-                # tries using the ico file
                 self.iconbitmap(ico_path)
             elif os.path.exists(png_path):
-                # Fallback to PNG, saving the reference to prevent garbage collection
                 self._window_icon = ImageTk.PhotoImage(Image.open(png_path))
                 self.iconphoto(False, self._window_icon)
             else:
@@ -103,40 +91,54 @@ class AppController(ctk.CTk):
             print(f"Window icon warning: {e}")
 
         self.current_frame = None
+        self.after(50, self.run_startup_setup)
 
-        # Start the auth check 50ms after the UI loads so the
-        # window appears instantly
-        self.after(50, self.check_initial_auth_state)
+    def run_startup_setup(self):
+        """Runs Playwright browser installation in a background thread."""
+        self.show_loading_screen("Verifying browser components...")
+
+        def bg_setup():
+            try:
+                # 1. Access Playwright's internal bundled installer directly
+                from playwright._impl._driver import compute_driver_executable, get_driver_env
+                driver_executable = compute_driver_executable()
+                env = get_driver_env()
+
+                # 2. Execute the internal driver to install Chromium silently
+                subprocess.run(
+                    [driver_executable, "install", "chromium"],
+                    env=env,
+                    capture_output=True,
+                    check=False,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+            except Exception as e:
+                print(f"Browser setup error: {e}")
+
+            # Once complete, proceed to the standard authentication check
+            self.after(0, self.check_initial_auth_state)
+
+        threading.Thread(target=bg_setup, daemon=True).start()
 
     def check_initial_auth_state(self):
-        """Uses fast check first; falls back to Playwright login only when the  session is expired."""
-
-        # 1. Check existing session cookies directly via lightweight HTTP GET
+        """Uses fast check first; falls back to Playwright login only when the session is expired."""
         if check_cookie_session_fast():
             self.show_dashboard()
             return
 
-        # 2. Check stored credentials if session cookie is invalid/expired
         creds = storage.load_credentials()
         if not creds:
             self.show_login()
             return
 
-        # 3. Refresh session via Playwright in a background thread
         self.show_loading_screen("Refreshing session...")
-
-
-
-
-
-
-
 
         def bg_auth():
             status = run_daily_login(creds)
-            if status == "SUCCESS":
+            # Accommodates both boolean and string return types
+            if status is True or status == "SUCCESS":
                 self.after(0, self.show_dashboard)
-            elif status == "AUTH_FAILED":
+            elif status is False or status == "AUTH_FAILED":
                 self.after(0, self.handle_auth_failure)
             else:
                 self.after(0, self.show_network_error)
@@ -151,7 +153,7 @@ class AppController(ctk.CTk):
         self.show_login()
 
     def show_loading_screen(self, message="Loading..."):
-        """Displays a loading state during session refresh."""
+        """Displays a loading state during session refresh or setup."""
         if self.current_frame is not None:
             self.current_frame.destroy()
 
@@ -170,7 +172,7 @@ class AppController(ctk.CTk):
         spinner.start()
 
     def show_network_error(self):
-        """Displays an error screen with a retry button if the background auto-login fails 3 times."""
+        """Displays an error screen with a retry button if the background auto-login fails."""
         if self.current_frame is not None:
             self.current_frame.destroy()
 

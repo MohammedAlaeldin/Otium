@@ -16,6 +16,7 @@ from home_backend import (
 )
 from outlook_backend import OutlookBackend
 import ebwise_backend
+from views.teams_view import open_in_browser # Imported to use the authenticated Playwright launcher
 
 THEME = {
     "bg_dark": "#121216",
@@ -246,7 +247,8 @@ class HomeView(ctk.CTkFrame):
         if live:
             self.banner_frame.pack(fill="x", padx=20, pady=(20, 0), before=self.body_container)
             self.banner_title.configure(text=f"🎥 Live Now: {live['subject']} ({live['time']})")
-            self.banner_join_btn.configure(command=lambda u=live['url']: webbrowser.open(u))
+            # Replaced standard webbrowser with the authenticated Playwright launcher
+            self.banner_join_btn.configure(command=lambda u=live['url']: open_in_browser(u))
         else:
             self.banner_frame.pack_forget()
 
@@ -278,7 +280,7 @@ class HomeView(ctk.CTkFrame):
 
         source_color = THEME["accent_indigo"] if item["source"] == "eBwise" else THEME["teams_purple"] if item[
                                                                                                               "source"] == "Teams" else \
-        THEME["outlook_blue"]
+            THEME["outlook_blue"]
 
         source_frame = ctk.CTkFrame(top_row, fg_color="transparent")
         source_frame.pack(side="left")
@@ -316,6 +318,10 @@ class HomeView(ctk.CTkFrame):
         def on_click(e):
             dismiss_notification(item["id"])
             card.destroy()
+
+            # Remove from local memory so toggling filters doesn't bring it back
+            self.raw_feed = [f for f in self.raw_feed if f.get("id") != item["id"]]
+
             src = item["source"]
             payload = {}
             if src == "Outlook":
@@ -323,12 +329,16 @@ class HomeView(ctk.CTkFrame):
                 payload = {"msg_id": item.get("msg_id")}
                 self._navigate_to_view("Outlook", payload)
             elif src == "Teams":
-                payload = {
-                    "type": item.get("type"), "chat_id": item.get("chat_id"),
-                    "team_id": item.get("team_id"), "channel_id": item.get("channel_id"),
-                    "chat_title": item.get("chat_title")
-                }
-                self._navigate_to_view("Teams", payload)
+                # Ensure meetings clicked from the feed open through Playwright
+                if item.get("type") == "meeting" and item.get("url"):
+                    open_in_browser(item.get("url"))
+                else:
+                    payload = {
+                        "type": item.get("type"), "chat_id": item.get("chat_id"),
+                        "team_id": item.get("team_id"), "channel_id": item.get("channel_id"),
+                        "chat_title": item.get("chat_title")
+                    }
+                    self._navigate_to_view("Teams", payload)
             elif src == "eBwise":
                 url = item.get("url")
                 if url:

@@ -71,6 +71,13 @@ def dismiss_notification(notif_id: str):
     if notif_id not in dismissed:
         dismissed.append(notif_id)
         prefs["dismissed_notifications"] = dismissed
+
+        # Instantly purge from cache to prevent ghost notifications on next launch
+        cache = prefs.get("cached_home_data", {})
+        if "feed" in cache:
+            cache["feed"] = [item for item in cache.get("feed", []) if item.get("id") != notif_id]
+            prefs["cached_home_data"] = cache
+
         save_preferences(prefs)
 
 
@@ -105,6 +112,13 @@ def delete_custom_task(task_id: str):
     tasks = prefs.get("custom_tasks", [])
     tasks = [t for t in tasks if t.get("id") != task_id]
     prefs["custom_tasks"] = tasks
+
+    # Instantly purge from cache to prevent ghost tasks on next launch
+    cache = prefs.get("cached_home_data", {})
+    if "assignments" in cache:
+        cache["assignments"] = [item for item in cache.get("assignments", []) if item.get("id") != task_id]
+        prefs["cached_home_data"] = cache
+
     save_preferences(prefs)
 
 
