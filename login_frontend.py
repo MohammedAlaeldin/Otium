@@ -142,10 +142,21 @@ class OtiumLoginApp(ctk.CTkFrame):
             font=ctk.CTkFont(underline=True),
             cursor="hand2"
         )
-        self.link_text.pack(padx=15, pady=(0, 10))
+        self.link_text.pack(padx=15, pady=(0, 5))
+
+        # --- NEW MICROSOFT LINK ---
+        self.ms_link = ctk.CTkLabel(
+            self.tooltip_box,
+            text="Microsoft Link",
+            text_color=THEME["accent_indigo"],
+            font=ctk.CTkFont(underline=True),
+            cursor="hand2"
+        )
+        self.ms_link.pack(padx=15, pady=(0, 10))
 
         self.info_icon.bind("<Button-1>", self.toggle_tooltip)
         self.link_text.bind("<Button-1>", self.open_youtube_link)
+        self.ms_link.bind("<Button-1>", lambda e: webbrowser.open_new("https://myaccount.microsoft.com"))
 
         # Status label
         self.status_label = ctk.CTkLabel(
@@ -206,14 +217,14 @@ class OtiumLoginApp(ctk.CTkFrame):
         else:
             self.update_idletasks()
             self.target_x = self.info_icon.winfo_rootx() - self.winfo_rootx() + self.info_icon.winfo_width() - 245
-            self.target_y = self.info_icon.winfo_rooty() - self.winfo_rooty() - 125
+            self.target_y = self.info_icon.winfo_rooty() - self.winfo_rooty() - 150
             self.current_y = self.target_y - 30
             self.tooltip_box.tkraise()
             self.animate_slide_down()
             self.is_tooltip_visible = True
 
     def open_youtube_link(self, event):
-        webbrowser.open_new("https://youtu.be/QDia3e12czc?si=fnOB68m7FaxGoJIG")
+        webbrowser.open_new("https://youtu.be/MkJ3sdMjgwY?si=iXfsdcJRO2xLzUJw")
 
     def copy_code_to_clipboard(self, event):
         current_text = self.status_label.cget("text")
