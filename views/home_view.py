@@ -456,7 +456,7 @@ class HomeView(ctk.CTkFrame):
         modal.title("Add Custom Task")
         modal.geometry("400x350")
         modal.configure(fg_color=THEME["bg_dark"])
-        modal.transient(self.winfo_toplevel())
+        modal.attributes('-topmost', True)
         modal.grab_set()
 
         # --- Apply Window Icon ---

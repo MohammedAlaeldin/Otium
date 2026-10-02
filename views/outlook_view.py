@@ -170,8 +170,8 @@ class ComposeEmailModal(ctk.CTkToplevel):
                 self.backend.send_email(to_addr, subject, body, self.attachment_paths)
                 self.after(0, self.destroy)
                 self.after(0, lambda: messagebox.showinfo("Success", "Email sent successfully!"))
-            except Exception as e:
-                self.after(0, lambda: messagebox.showerror("Send Error", str(e)))
+            except Exception:
+                self.after(0, lambda: messagebox.showerror("Send Error", "Your internet connection is bad. Please refresh to try again."))
                 self.after(0, lambda: self.send_btn.configure(state="normal", text="Send Email"))
 
         threading.Thread(target=bg_send, daemon=True).start()
@@ -206,9 +206,9 @@ class OutlookView(ctk.CTkFrame):
                 try:
                     msg = self.backend.get_single_message(msg_id)
                     self.after(0, lambda: self.open_email(msg))
-                except Exception as e:
+                except Exception:
                     self.after(0,
-                               lambda err=str(e): self.rp_subject.configure(text=f"⚠️ Could not load message: {err}"))
+                               lambda: self.rp_subject.configure(text="⚠️ Your internet connection is bad. Please refresh to try again."))
 
             threading.Thread(target=_bg_fetch, daemon=True).start()
 
@@ -341,7 +341,7 @@ class OutlookView(ctk.CTkFrame):
 
     def _show_error_ui(self, error_msg):
         for w in self.list_pane.winfo_children(): w.destroy()
-        ctk.CTkLabel(self.list_pane, text=f"⚠️ Connection Error:\n\n{error_msg}", text_color=THEME["lock_red"],
+        ctk.CTkLabel(self.list_pane, text="⚠️ Your internet connection is bad. Please refresh to try again.", text_color=THEME["lock_red"],
                      wraplength=280).pack(pady=40)
         self.sync_btn.configure(state="normal", text="↻ Refresh")
 

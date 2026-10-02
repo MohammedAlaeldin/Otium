@@ -75,17 +75,17 @@ class AppController(ctk.CTk):
         self.geometry("900x650")
         self.minsize(700, 500)
 
-        # --- FIX: Force Windows to use your icon for the Taskbar ---
+        # --- FIX: Force Windows to use the logo for the Taskbar ---
         try:
             if os.name == 'nt':
                 myappid = 'otium.academic.commandcenter.1.0'
                 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
         except Exception:
             pass
-        # -----------------------------------------------------------
+
 
         try:
-            # Check if we are running as a PyInstaller executable
+            # Check if the app is running as a PyInstaller executable
             if getattr(sys, 'frozen', False):
                 base_dir = sys._MEIPASS
             else:

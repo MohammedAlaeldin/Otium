@@ -189,7 +189,7 @@ class EbwiseView(ctk.CTkFrame):
 
         if data.get("status") != "SUCCESS":
             for widget in self.scroll_container.winfo_children(): widget.destroy()
-            ctk.CTkLabel(self.scroll_container, text=f"⚠️ Failed to load data (Status: {data.get('status')})",
+            ctk.CTkLabel(self.scroll_container, text="⚠️ Your internet connection is bad. Please refresh to try again.",
                          text_color="#F87171", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=40)
             return
 
@@ -471,7 +471,7 @@ class EbwiseView(ctk.CTkFrame):
         modal.title("Participant Profile")
         modal.geometry("450x550")
         modal.configure(fg_color=THEME["bg_dark"])
-        modal.transient(self.winfo_toplevel())
+        modal.attributes('-topmost', True)
         modal.grab_set()
 
         # --- Apply Window Icon ---
@@ -483,6 +483,7 @@ class EbwiseView(ctk.CTkFrame):
                 modal.iconbitmap(ico_path)
         except Exception:
             pass
+
 
         scroll = ctk.CTkScrollableFrame(modal, fg_color="transparent")
         scroll.pack(fill="both", expand=True, padx=10, pady=10)

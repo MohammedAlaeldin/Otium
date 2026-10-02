@@ -248,8 +248,16 @@ class DashboardWindow(ctk.CTkFrame):
             btn_frame, text="Log Out", width=110, height=32,
             fg_color=THEME["danger"], hover_color="#B91C1C",
             text_color="#FFFFFF", font=ctk.CTkFont(size=12, weight="bold"),
-            command=_do_logout
-        )
+            command=_do_logout)
+        try:
+            import sys
+            base_dir = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.abspath(".")
+            ico_path = os.path.join(base_dir, "logo.ico")
+            if os.path.exists(ico_path):
+                modal.iconbitmap(ico_path)
+        except Exception:
+            pass
+
         logout_confirm_btn.pack(side="right", expand=True, padx=(5, 0))
 
     def logout(self):
