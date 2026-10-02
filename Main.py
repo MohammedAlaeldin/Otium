@@ -75,8 +75,22 @@ class AppController(ctk.CTk):
         self.geometry("900x650")
         self.minsize(700, 500)
 
+        # --- FIX: Force Windows to use your icon for the Taskbar ---
         try:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
+            if os.name == 'nt':
+                myappid = 'otium.academic.commandcenter.1.0'
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except Exception:
+            pass
+        # -----------------------------------------------------------
+
+        try:
+            # Check if we are running as a PyInstaller executable
+            if getattr(sys, 'frozen', False):
+                base_dir = sys._MEIPASS
+            else:
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+
             ico_path = os.path.join(base_dir, "logo.ico")
             png_path = os.path.join(base_dir, "logo.png")
 
@@ -99,14 +113,24 @@ class AppController(ctk.CTk):
 
         def bg_setup():
             try:
-                # 1. Access Playwright's internal bundled installer directly
+                import storage
+                # 1. Force Playwright to download to the user's isolated Otium app folder
+                os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(storage.get_app_dir(), "pw-browsers")
+
+                # 2. Access Playwright's internal bundled installer directly
                 from playwright._impl._driver import compute_driver_executable, get_driver_env
                 driver_executable = compute_driver_executable()
                 env = get_driver_env()
 
-                # 2. Execute the internal driver to install Chromium silently
+                # Safely handle both string and tuple returns from Playwright
+                if isinstance(driver_executable, tuple):
+                    cmd = list(driver_executable) + ["install", "chromium"]
+                else:
+                    cmd = [driver_executable, "install", "chromium"]
+
+                # 3. Execute the internal driver to install Chromium silently
                 subprocess.run(
-                    [driver_executable, "install", "chromium"],
+                    cmd,
                     env=env,
                     capture_output=True,
                     check=False,
@@ -138,9 +162,12 @@ class AppController(ctk.CTk):
             # Accommodates both boolean and string return types
             if status is True or status == "SUCCESS":
                 self.after(0, self.show_dashboard)
-            elif status is False or status == "AUTH_FAILED":
+            elif status == "AUTH_FAILED":
+                # Only purge data if explicitly told the password changed
                 self.after(0, self.handle_auth_failure)
             else:
+                # 'False' will now fall here, safely showing the retry screen
+                # WITHOUT deleting the user's saved credentials.
                 self.after(0, self.show_network_error)
 
         threading.Thread(target=bg_auth, daemon=True).start()

@@ -80,7 +80,8 @@ class ScheduleView(ctk.CTkFrame):
             res = loop.run_until_complete(schedule_backend.fetch_raw_schedule())
             self.after(0, lambda: self._render_ui(res))
         except Exception as e:
-            self.after(0, lambda: self._render_ui({"error": str(e)}))
+            err_msg = str(e)
+            self.after(0, lambda msg=err_msg: self._render_ui({"error": msg}))
 
     def _render_error(self, frame, error_msg=None):
         for child in frame.winfo_children():
