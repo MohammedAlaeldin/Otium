@@ -3,7 +3,8 @@ import threading
 import webbrowser
 import math
 from datetime import datetime, timedelta
-
+import os
+import sys
 from home_backend import (
     get_home_data,
     get_cached_home_data,
@@ -458,6 +459,15 @@ class HomeView(ctk.CTkFrame):
         modal.transient(self.winfo_toplevel())
         modal.grab_set()
 
+        # --- Apply Window Icon ---
+        try:
+            import sys
+            base_dir = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.abspath(".")
+            ico_path = os.path.join(base_dir, "logo.ico")
+            if os.path.exists(ico_path):
+                modal.iconbitmap(ico_path)
+        except Exception:
+            pass
         ctk.CTkLabel(
             modal, text="Create Assigned Task", font=ctk.CTkFont(size=16, weight="bold"),
             text_color=THEME["text_primary"]

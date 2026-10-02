@@ -2,7 +2,7 @@ import os
 import threading
 import customtkinter as ctk
 import storage
-
+import webbrowser
 from views.home_view import HomeView
 from views.outlook_view import OutlookView
 from views.teams_view import TeamsView
@@ -144,6 +144,21 @@ class DashboardWindow(ctk.CTkFrame):
         spacer = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         spacer.pack(fill="both", expand=True)
 
+        # --- NEW: Bug Report Button ---
+        bug_btn = ctk.CTkButton(
+            self.sidebar,
+            text="🐞 Report Bug",
+            anchor="w",
+            height=40,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color="transparent",
+            text_color=THEME["text_secondary"],  # Uses the subtle slate color
+            hover_color=THEME["card_hover"],
+            command=lambda: webbrowser.open("https://github.com/MohammedAlaeldin/Otium/issues/new")
+        )
+        bug_btn.pack(fill="x", padx=10, pady=(0, 5))
+
+        # --- UPDATED: Logout Button ---
         logout_btn = ctk.CTkButton(
             self.sidebar,
             text="Log Out",
@@ -155,7 +170,8 @@ class DashboardWindow(ctk.CTkFrame):
             hover_color="#3B1820",
             command=self.confirm_logout
         )
-        logout_btn.pack(fill="x", padx=10, pady=20)
+        # Changed pady to (0, 20) so it stacks smoothly below the bug button
+        logout_btn.pack(fill="x", padx=10, pady=(0, 20))
 
     def show_view(self, view_name: str, payload: dict = None):
         """Switches active view and dismisses sidebar cleanly."""

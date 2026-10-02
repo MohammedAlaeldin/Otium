@@ -4,6 +4,8 @@ import customtkinter as ctk
 import ebwise_backend
 from ebwise_backend import open_ebwise_url_authenticated
 from storage import load_preferences, save_preferences
+import os
+import sys
 
 THEME = {
     "bg_dark": "#121216",
@@ -471,6 +473,16 @@ class EbwiseView(ctk.CTkFrame):
         modal.configure(fg_color=THEME["bg_dark"])
         modal.transient(self.winfo_toplevel())
         modal.grab_set()
+
+        # --- Apply Window Icon ---
+        try:
+            import sys
+            base_dir = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.abspath(".")
+            ico_path = os.path.join(base_dir, "logo.ico")
+            if os.path.exists(ico_path):
+                modal.iconbitmap(ico_path)
+        except Exception:
+            pass
 
         scroll = ctk.CTkScrollableFrame(modal, fg_color="transparent")
         scroll.pack(fill="both", expand=True, padx=10, pady=10)

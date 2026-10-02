@@ -16,9 +16,7 @@ THEME = {
     "text_primary": "#F1F5F9",
     "text_secondary": "#94A3B8",
     "accent_indigo": "#6366F1",
-    "accent_hover": "#4F46E5",
-    "error_text": "#FFA3A3",
-    "danger": "#EF4444"
+    "accent_hover": "#4F46E5"
 }
 
 DAYS_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -36,7 +34,7 @@ class ScheduleView(ctk.CTkFrame):
         self.top_bar.grid_propagate(False)
 
         self.header_title = ctk.CTkLabel(
-            self.top_bar, text="Schedule", font=ctk.CTkFont(size=22, weight="bold"),
+            self.top_bar, text="Weekly Schedule", font=ctk.CTkFont(size=22, weight="bold"),
             text_color=THEME["text_primary"]
         )
         self.header_title.pack(side="left")
@@ -65,7 +63,7 @@ class ScheduleView(ctk.CTkFrame):
             child.destroy()
 
         ctk.CTkLabel(
-            self.schedule_list_frame, text="⏳ Launching background browser to extract Clic schedule...",
+            self.schedule_list_frame, text="⏳ Simulating calendar navigation to extract full week...",
             font=ctk.CTkFont(size=14),
             text_color=THEME["text_secondary"]
         ).pack(pady=40)
@@ -74,32 +72,57 @@ class ScheduleView(ctk.CTkFrame):
 
     def _fetch_and_render(self):
         try:
-            # Create a new event loop inside the background thread for Playwright
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             res = loop.run_until_complete(schedule_backend.fetch_raw_schedule())
             self.after(0, lambda: self._render_ui(res))
-        except Exception as e:
-            err_msg = str(e)
-            self.after(0, lambda msg=err_msg: self._render_ui({"error": msg}))
+        except Exception:
+            self.after(0, lambda: self._render_error())
 
-    def _render_error(self, frame, error_msg=None):
-        for child in frame.winfo_children():
+    def _render_no_classes(self, message: str):
+        """Shown when CLIC itself reports no classes for this period — a normal
+        state (holidays, term break, light week), not a sync/connection problem,
+        so it gets its own calmer card instead of the 'Sync Needed' one."""
+        for child in self.schedule_list_frame.winfo_children():
             child.destroy()
 
-        card = ctk.CTkFrame(frame, fg_color=THEME["card_bg"], border_color=THEME["border"], border_width=1,
-                            corner_radius=10)
+        if hasattr(self, "refresh_btn"):
+            self.refresh_btn.configure(state="normal", text="↻ Refresh")
+
+        card = ctk.CTkFrame(self.schedule_list_frame, fg_color=THEME["card_bg"], border_color=THEME["border"],
+                            border_width=1, corner_radius=10)
         card.pack(fill="x", padx=10, pady=15, ipady=10)
 
-        ctk.CTkLabel(card, text="🔌 Sync Needed / Connection Issue", font=ctk.CTkFont(weight="bold", size=15),
+        ctk.CTkLabel(card, text="📅 No Classes Found", font=ctk.CTkFont(weight="bold", size=15),
                      text_color=THEME["text_primary"]).pack(pady=(15, 5))
 
-        msg = "Unable to connect or fetch your schedule right now.\nPlease click refresh below to try sync again."
-        if error_msg and "No scheduled events found" not in error_msg:
-            msg += f"\n\nDetails: {error_msg}"
+        ctk.CTkLabel(card, text=message, font=ctk.CTkFont(size=12),
+                     text_color=THEME["text_secondary"], justify="center", wraplength=320).pack(pady=5)
 
-        ctk.CTkLabel(card, text=msg, font=ctk.CTkFont(size=12), text_color=THEME["text_secondary"],
-                     justify="center").pack(pady=5)
+        refresh_btn = ctk.CTkButton(
+            card, text="↻ Refresh", width=140, height=32,
+            fg_color=THEME["accent_indigo"], hover_color=THEME["accent_hover"], text_color=THEME["text_primary"],
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self.load_data
+        )
+        refresh_btn.pack(pady=(10, 15))
+
+    def _render_error(self):
+        for child in self.schedule_list_frame.winfo_children():
+            child.destroy()
+
+        if hasattr(self, "refresh_btn"):
+            self.refresh_btn.configure(state="normal", text="↻ Refresh")
+
+        card = ctk.CTkFrame(self.schedule_list_frame, fg_color=THEME["card_bg"], border_color=THEME["border"],
+                            border_width=1, corner_radius=10)
+        card.pack(fill="x", padx=10, pady=15, ipady=10)
+
+        ctk.CTkLabel(card, text="🔌 Sync Needed", font=ctk.CTkFont(weight="bold", size=15),
+                     text_color=THEME["text_primary"]).pack(pady=(15, 5))
+
+        ctk.CTkLabel(card, text="Bad internet connection, please refresh.", font=ctk.CTkFont(size=12),
+                     text_color=THEME["text_secondary"], justify="center").pack(pady=5)
 
         refresh_btn = ctk.CTkButton(
             card, text="↻ Please Refresh", width=140, height=32,
@@ -116,24 +139,31 @@ class ScheduleView(ctk.CTkFrame):
         for child in self.schedule_list_frame.winfo_children():
             child.destroy()
 
+        if result.get("status") == "empty":
+            self._render_no_classes(result.get("message", "No scheduled classes were found."))
+            return
+
         if "error" in result:
-            self._render_error(self.schedule_list_frame, result["error"])
+            self._render_error()
             return
 
         raw_data = result.get("data", "")
         classes = self.parse_data(raw_data)
 
         if not classes:
-            self._render_error(self.schedule_list_frame, "No scheduled events found.")
+            # Reaching here means CLIC's page loaded and parsed fine, but nothing
+            # matched — no known "no data" phrase triggered either. That's still not
+            # evidence of a connection problem, so it gets the calm card too, not
+            # the alarming "Sync Needed" one.
+            self._render_no_classes("No scheduled classes were found for this period.")
             return
 
-        self.schedule_list_frame.grid_columnconfigure(0, weight=1)
-        self.schedule_list_frame.grid_columnconfigure(1, weight=1)
-        self.schedule_list_frame.grid_columnconfigure(2, weight=2)
-        self.schedule_list_frame.grid_columnconfigure(3, weight=1)
-        self.schedule_list_frame.grid_columnconfigure(4, weight=3)
+        # 5 Columns for List View: Day, Time, Code, Session, Venue
+        col_weights = [1, 1, 3, 1, 2]
+        for idx, w in enumerate(col_weights):
+            self.schedule_list_frame.grid_columnconfigure(idx, weight=w)
 
-        headers = ["Day", "Time", "Subject Code", "Session", "Venue"]
+        headers = ["Day", "Time", "Course Info", "Session", "Venue"]
 
         for col_idx, col_name in enumerate(headers):
             cell = ctk.CTkFrame(
@@ -157,7 +187,7 @@ class ScheduleView(ctk.CTkFrame):
             day_text = c["day"] if c["day"] != current_day else ""
             current_day = c["day"]
 
-            row_data = [day_text, c["time"], c["code"], c["session"], c["room"]]
+            row_data = [day_text, c["time"], c["code"], c["session"], c["venue"]]
 
             for col_idx, text in enumerate(row_data):
                 cell = ctk.CTkFrame(
@@ -173,67 +203,98 @@ class ScheduleView(ctk.CTkFrame):
 
                 lbl = ctk.CTkLabel(
                     cell, text=text, font=ctk.CTkFont(size=12, weight=font_weight), text_color=text_col, anchor="w",
-                    justify="left"
+                    justify="left", wraplength=220
                 )
                 lbl.pack(padx=12, pady=12, fill="x", expand=True)
 
     def parse_data(self, raw_text):
+        """Scans the 'By Date' linear list view and groups the 5 data points."""
         classes = []
         lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
 
         current_day = ""
-        i = 0
-
         days_pattern = re.compile(r"^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)", re.IGNORECASE)
-        time_pattern = re.compile(r"^(\d{1,2}:\d{2}\s*(?:AM|PM)?)", re.IGNORECASE)
+        # Matches time like "12:00PM" or "12:00 PM - 2:00 PM"
+        time_pattern = re.compile(r"^(\d{1,2}:\d{2}\s*[APM]{2}(?:\s*-\s*\d{1,2}:\d{2}\s*[APM]{2})?)", re.IGNORECASE)
+        room_pattern = re.compile(r"^Room:\s*(.*)", re.IGNORECASE)
 
+        i = 0
         while i < len(lines):
             line = lines[i]
 
+            # 1. Day Header (e.g. 'Thursday September 3')
             day_match = days_pattern.match(line)
             if day_match:
                 current_day = day_match.group(1).capitalize()
                 i += 1
                 continue
 
+            # 2. Time Block
             time_match = time_pattern.match(line)
             if time_match and current_day:
                 time_str = time_match.group(1)
-                i += 1
 
-                course_line = lines[i] if i < len(lines) else ""
-                i += 1
+                code = "Unknown Course"
+                session = "Class"
+                venue = "TBA"
 
-                room = ""
-                if i < len(lines) and lines[i].startswith("Room:"):
-                    room = lines[i].replace("Room:", "").strip()
-                    i += 1
+                # Next line contains Course Code + Session (e.g. 'C MT1134 Tutorial')
+                if i + 1 < len(lines):
+                    info_line = lines[i + 1]
+                    sess_match = re.search(r'\b(Lecture|Tutorial|Lab|Laboratory|Clinical)$', info_line, re.IGNORECASE)
+                    if sess_match:
+                        session = sess_match.group(1).capitalize()
+                        code = info_line[:sess_match.start()].strip()
+                    else:
+                        code = info_line
 
-                if i < len(lines) and lines[i].startswith("Status:"):
-                    i += 1
+                # Look ahead for 'Room:' (e.g. 'Room: CQCR3001-FCI Classroom')
+                for offset in range(1, 4):
+                    if i + offset < len(lines):
+                        rm = room_pattern.match(lines[i + offset])
+                        if rm:
+                            # Trim out the building designation if desired, or keep it whole
+                            venue = rm.group(1).split('-')[0].strip()
+                            break
 
-                parts = course_line.split()
-                if len(parts) >= 2:
-                    session = parts[-1]
-                    code = " ".join(parts[:-1])
-                else:
-                    code = course_line
-                    session = "Class"
+                        # Sometimes space separation causes the line to look like 'C MT1134 Tutorial Room: CQCR...'
+                        inline_room = re.search(r'Room:\s*(.*)', lines[i + offset], re.IGNORECASE)
+                        if inline_room:
+                            venue = inline_room.group(1).split('-')[0].strip()
+                            break
 
                 classes.append({
                     "day": current_day,
                     "time": time_str,
                     "code": code,
                     "session": session,
-                    "room": room
+                    "venue": venue
                 })
+                i += 2  # Skip over the time and info line we just processed
                 continue
 
             i += 1
 
-        def day_sort_key(c):
-            day_index = DAYS_ORDER.index(c["day"]) if c["day"] in DAYS_ORDER else 99
-            return (day_index, c["time"])
+        # Deduplicate
+        unique_classes = []
+        seen = set()
+        for c in classes:
+            identifier = f"{c['day']}-{c['time']}-{c['code']}-{c['session']}"
+            if identifier not in seen:
+                seen.add(identifier)
+                unique_classes.append(c)
 
-        classes.sort(key=day_sort_key)
-        return classes
+        # Sort chronologically
+        def day_sort_key(c):
+            d_idx = DAYS_ORDER.index(c["day"]) if c["day"] in DAYS_ORDER else 98
+            t_val = 0
+            t_match = re.search(r'(\d{1,2}):(\d{2})\s*([APM]{2})', c["time"], re.IGNORECASE)
+            if t_match:
+                h, m, ampm = int(t_match.group(1)), int(t_match.group(2)), t_match.group(3).upper()
+                if ampm == "PM" and h != 12: h += 12
+                if ampm == "AM" and h == 12: h = 0
+                t_val = h * 60 + m
+            return (d_idx, t_val)
+
+        unique_classes.sort(key=day_sort_key)
+        return unique_classes

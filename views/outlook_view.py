@@ -58,9 +58,18 @@ class ComposeEmailModal(ctk.CTkToplevel):
         self.resizable(False, False)
         self.attributes('-topmost', True)
         self.configure(fg_color=THEME["bg_dark"])
+
+        # --- Apply Window Icon ---
+        try:
+            base_dir = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.abspath(".")
+            ico_path = os.path.join(base_dir, "logo.ico")
+            if os.path.exists(ico_path):
+                self.iconbitmap(ico_path)
+        except Exception:
+            pass
+
         self.attachment_paths = []
         self._build_compose_ui(reply_to)
-
     def _build_compose_ui(self, reply_to):
         header = ctk.CTkFrame(self, height=50, fg_color=THEME["header_bg"], corner_radius=0)
         header.pack(fill="x", side="top")

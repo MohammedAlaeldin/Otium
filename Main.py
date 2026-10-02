@@ -5,7 +5,7 @@ import requests
 import subprocess
 import customtkinter as ctk
 from PIL import Image, ImageTk
-
+import webbrowser
 import storage
 
 # CRITICAL: Set the custom Playwright browser path before any other modules load it.
@@ -156,32 +156,38 @@ class AppController(ctk.CTk):
         threading.Thread(target=bg_setup, daemon=True).start()
 
     def check_initial_auth_state(self):
-        """Uses fast check first; falls back to Playwright login only when the session is expired."""
-        if check_cookie_session_fast():
-            self.show_dashboard()
-            return
+        """Runs all network checks in a background thread to prevent UI freezing."""
+        self.show_loading_screen("Authenticating...")
+        if hasattr(self, 'status_label') and self.status_label.winfo_exists():
+            self.status_label.configure(text="Verifying secure session...")
 
-        creds = storage.load_credentials()
-        if not creds:
-            self.show_login()
-            return
+        def bg_auth_flow():
+            # 1. Fast check now runs in the background so the UI doesn't freeze
+            if check_cookie_session_fast():
+                self.after(0, self.show_dashboard)
+                return
 
-        self.show_loading_screen("Refreshing session...")
+            # 2. Check for saved credentials
+            import storage
+            creds = storage.load_credentials()
+            if not creds:
+                self.after(0, self.show_login)
+                return
 
-        def bg_auth():
+            # 3. Fallback to Playwright refresh
+            if hasattr(self, 'status_label') and self.status_label.winfo_exists():
+                self.after(0, lambda: self.status_label.configure(text="Refreshing background session..."))
+
             status = run_daily_login(creds)
-            # Accommodates both boolean and string return types
             if status is True or status == "SUCCESS":
                 self.after(0, self.show_dashboard)
             elif status == "AUTH_FAILED":
-                # Only purge data if explicitly told the password changed
                 self.after(0, self.handle_auth_failure)
             else:
-                # 'False' will now fall here, safely showing the retry screen
-                # WITHOUT deleting the user's saved credentials.
                 self.after(0, self.show_network_error)
 
-        threading.Thread(target=bg_auth, daemon=True).start()
+        # Start the background thread
+        threading.Thread(target=bg_auth_flow, daemon=True).start()
 
     def handle_auth_failure(self):
         """Clears outdated credentials and redirects to login."""
@@ -267,6 +273,19 @@ class AppController(ctk.CTk):
             command=self.show_login
         )
         login_btn.pack(side="left", padx=10)
+
+        login_btn.pack(side="left", padx=10)
+        #bug report button
+        bug_btn = ctk.CTkButton(
+            self.current_frame,
+            text="🐞 Report an Issue",
+            font=ctk.CTkFont(size=12, underline=True),
+            fg_color="transparent",
+            text_color="#94A3B8",
+            hover_color="#1E1E2A",
+            command=lambda: webbrowser.open("https://github.com/MohammedAlaeldin/Otium/issues/new")
+        )
+        bug_btn.place(relx=0.5, rely=0.8, anchor="center")
 
     def show_login(self):
         """Presents the Login Screen."""
