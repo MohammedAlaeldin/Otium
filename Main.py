@@ -108,34 +108,45 @@ class AppController(ctk.CTk):
         self.after(50, self.run_startup_setup)
 
     def run_startup_setup(self):
-        """Runs Playwright browser installation in a background thread."""
-        self.show_loading_screen("Verifying browser components...")
+        """Runs Playwright browser installation in a background thread and streams progress."""
+        self.show_loading_screen("Setting up Otium for the first time...")
+        self.status_label.configure(text="Initializing browser engine download (this may take a few minutes)...")
 
         def bg_setup():
             try:
                 import storage
-                # 1. Force Playwright to download to the user's isolated Otium app folder
                 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(storage.get_app_dir(), "pw-browsers")
 
-                # 2. Access Playwright's internal bundled installer directly
                 from playwright._impl._driver import compute_driver_executable, get_driver_env
                 driver_executable = compute_driver_executable()
                 env = get_driver_env()
 
-                # Safely handle both string and tuple returns from Playwright
                 if isinstance(driver_executable, tuple):
                     cmd = list(driver_executable) + ["install", "chromium"]
                 else:
                     cmd = [driver_executable, "install", "chromium"]
 
-                # 3. Execute the internal driver to install Chromium silently
-                subprocess.run(
+                # Use Popen to stream the installation output live
+                process = subprocess.Popen(
                     cmd,
                     env=env,
-                    capture_output=True,
-                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
                     creationflags=subprocess.CREATE_NO_WINDOW
                 )
+
+                # Read output line-by-line and update the status label on the UI
+                for line in process.stdout:
+                    clean_line = line.strip()
+                    if clean_line and hasattr(self, 'status_label') and self.status_label.winfo_exists():
+                        # Truncate long lines so they fit nicely on the screen
+                        display_text = clean_line if len(clean_line) < 80 else clean_line[:77] + "..."
+                        self.after(0, lambda t=display_text: self.status_label.configure(text=t))
+
+                process.wait()
+
             except Exception as e:
                 print(f"Browser setup error: {e}")
 
@@ -197,6 +208,15 @@ class AppController(ctk.CTk):
         spinner = ctk.CTkProgressBar(self.current_frame, mode="indeterminate", width=220)
         spinner.place(relx=0.5, rely=0.53, anchor="center")
         spinner.start()
+
+        # --- NEW: A label to display live background tasks ---
+        self.status_label = ctk.CTkLabel(
+            self.current_frame,
+            text="",
+            font=ctk.CTkFont(size=12),
+            text_color="#94A3B8"
+        )
+        self.status_label.place(relx=0.5, rely=0.6, anchor="center")
 
     def show_network_error(self):
         """Displays an error screen with a retry button if the background auto-login fails."""
