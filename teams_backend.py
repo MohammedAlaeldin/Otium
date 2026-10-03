@@ -12,6 +12,7 @@ from storage import SESSION_FILE, get_app_dir, _get_or_create_master_key
 
 
 class TeamsBackend:
+    # setting auth tokens
     def __init__(self):
         self.skype_auth = None
         self.graph_token = None
@@ -19,6 +20,7 @@ class TeamsBackend:
         self.cache_file = os.path.join(get_app_dir(), "teams_token_cache.bin")
         self.last_errors = []
 
+    # cleaning up text from HTML and other stuff
     def _clean_text(self, raw_text: str) -> str:
         if not raw_text:
             return ""
@@ -30,6 +32,7 @@ class TeamsBackend:
             return ""
         return clean
 
+    
     def _parse_message_content(self, raw_content: str) -> dict:
         """Separates quoted reply content from the main message body."""
         if not raw_content:
@@ -72,6 +75,7 @@ class TeamsBackend:
             "quote_text": ""
         }
 
+    # Extracts Graph and Skype tokens from Teams' local/session storage
     def _load_cached_tokens(self):
         try:
             if os.path.exists(self.cache_file):
@@ -87,6 +91,7 @@ class TeamsBackend:
             pass
         return False
 
+    # Encrypts and saves the Graph and Skype tokens to a local cache file
     def _save_cached_tokens(self):
         try:
             fernet = Fernet(_get_or_create_master_key())
@@ -101,6 +106,7 @@ class TeamsBackend:
         except Exception:
             pass
 
+    # Clears the cached tokens and removes the cache file
     def _clear_cache(self):
         self.skype_auth = None
         self.graph_token = None
@@ -111,6 +117,7 @@ class TeamsBackend:
             except Exception:
                 pass
 
+    # Opens a Headless chromium browser to silently fetch the Graph and Skype tokens from Teams local/session storage
     async def _get_tokens_silently(self):
         if not os.path.exists(SESSION_FILE):
             raise FileNotFoundError(f"Session missing at {SESSION_FILE}! Please log in first.")
@@ -217,6 +224,7 @@ class TeamsBackend:
             finally:
                 await browser.close()
 
+    # Ensures that valid tokens are available refreshing them if necessary
     def _ensure_auth(self, force_refresh=False):
         if force_refresh:
             self._clear_cache()
@@ -233,6 +241,7 @@ class TeamsBackend:
             finally:
                 loop.close()
 
+    # Get the necessary headers for Skype API calls
     def _get_skype_headers(self):
         if not self.skype_auth: return {}
         auth_val = self.skype_auth.replace("Bearer ", "").replace("skypetoken=", "")
@@ -243,6 +252,7 @@ class TeamsBackend:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
         }
 
+    # Fetches Teams, Chats, and Calls data from Microsoft Graph and Skype APIS
     def fetch_dashboard_data(self, is_retry=False) -> dict:
         self.last_errors = []
         self._ensure_auth(force_refresh=is_retry)
@@ -347,6 +357,7 @@ class TeamsBackend:
             "debug": {"has_graph": bool(self.graph_token), "has_skype": bool(self.skype_auth)}
         }
 
+    # Fetches the last 30 messages from a specific chat thread using the Skype API
     def fetch_chat_history(self, chat_id: str) -> list:
         if not self.chat_svc_url or not self.skype_auth: return []
 
@@ -385,6 +396,7 @@ class TeamsBackend:
             print(f"❌ [CONSOLE EXCEPTION] Fetch Chat History Exception: {e}")
         return []
 
+    # Fetches the last 40 messages from a specific channel in a team using Microsoft Graph API
     def fetch_channel_messages(self, team_id: str, channel_id: str) -> list:
         self._ensure_auth()
         if not self.graph_token: return []
@@ -443,6 +455,7 @@ class TeamsBackend:
             print(f"Channel Msg Fetch Exception: {e}")
         return []
 
+    # Sends a text message to a specific chat thread using the Skype API
     def send_chat_message(self, chat_id: str, message_text: str) -> bool:
         if not self.chat_svc_url or not self.skype_auth: return False
         url = f"{self.chat_svc_url}/{chat_id}/messages"

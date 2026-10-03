@@ -34,7 +34,7 @@ async def _read_from_to_dates(frame):
         pass
     return None, None
 
-
+ # Launches a headless browser using Playwright, navigates through the CLIC portal to fetch the user's class schedule, and returns the raw text data or an error message if any issues occur during the process
 async def fetch_raw_schedule():
     if not os.path.exists(SESSION_FILE):
         return {"error": "auth"}
@@ -48,7 +48,7 @@ async def fetch_raw_schedule():
         page = await context.new_page()
 
         try:
-            # 1. Login & Authentication
+            # Login and Authentication
             await page.goto(LOGIN_URL, wait_until="networkidle", timeout=25000)
 
             sso_button = page.locator("button[title='Sign in with Microsoft']").or_(
@@ -76,7 +76,7 @@ async def fetch_raw_schedule():
             except Exception:
                 pass
 
-            # 2. Navigate to Clic Dashboard -> Class Schedule
+            #  Navigate to clic dashboard then to class schedule
             await page.wait_for_url("**/c/NUI_FRAMEWORK.PT_LANDINGPAGE.**", timeout=25000)
             await page.wait_for_load_state("networkidle", timeout=15000)
             await asyncio.sleep(2)
@@ -118,7 +118,7 @@ async def fetch_raw_schedule():
 
             if needs_extension:
                 try:
-                    # Find all calendar icons; the 'To' date is typically the second one
+                    # Find calendar icons
                     cal_btns = frame.locator(
                         "img[src*='PT_CALENDAR'], a[id*='prompt'], img[alt*='Calendar'], img[alt*='Choose a date']")
                     if await cal_btns.count() >= 2:
@@ -128,7 +128,7 @@ async def fetch_raw_schedule():
 
                     await page.wait_for_timeout(1500)  # Wait for the popup widget to render
 
-                    # Simulate pressing the Right Arrow 7 times
+                    # Simulate pressing the right arrow 7 times
                     for _ in range(7):
                         await page.keyboard.press("ArrowRight")
                         await asyncio.sleep(0.1)

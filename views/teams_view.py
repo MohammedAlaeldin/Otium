@@ -25,7 +25,7 @@ THEME = {
     "error_text": "#FFA3A3"
 }
 
-# Unified Tab styling used across the app
+# Tab style
 UNIFIED_TAB_COLORS = {
     "selected_color": "#4F46E5",
     "selected_hover_color": "#4338CA",
@@ -35,6 +35,7 @@ UNIFIED_TAB_COLORS = {
 }
 
 
+# Opens a headless Chromium browser to launch Microsoft Teams in a new window
 def _launch_playwright_teams(url: str):
     try:
         from playwright.sync_api import sync_playwright
@@ -60,12 +61,14 @@ def _launch_playwright_teams(url: str):
         webbrowser.open(url)
 
 
+# Opens a URL in the default web browser in a separate thread
 def open_in_browser(url: str):
     if not url: return
     threading.Thread(target=_launch_playwright_teams, args=(url,), daemon=True).start()
 
 
 class CollapsibleTeamCard(ctk.CTkFrame):
+    # Collapsible card widget representing a Microsoft Teams team and its channels
     def __init__(self, master, team_name, channels, on_channel_click, **kwargs):
         super().__init__(
             master, fg_color=THEME["card_bg"], border_color=THEME["border"],
@@ -108,6 +111,7 @@ class CollapsibleTeamCard(ctk.CTkFrame):
             )
             btn.pack(fill="x", pady=2)
 
+    # Expansion toggle
     def toggle(self):
         if self.is_expanded:
             self.chans_container.pack_forget()
@@ -120,6 +124,7 @@ class CollapsibleTeamCard(ctk.CTkFrame):
 
 
 class TeamsView(ctk.CTkFrame):
+    # Main view for displaying Microsoft Teams data, including channels, chats, and calls
     def __init__(self, parent):
         super().__init__(parent, fg_color=THEME["bg_dark"])
 
@@ -187,6 +192,7 @@ class TeamsView(ctk.CTkFrame):
         self._show_active_tab("Chats")
         self.load_data()
 
+    # Handles navigation payloads to switch tabs and display specific chats or channel posts
     def handle_navigation_payload(self, payload: dict):
         target_type = payload.get("type")
 
@@ -211,6 +217,7 @@ class TeamsView(ctk.CTkFrame):
                 mock_chan = {"id": channel_id, "displayName": "Linked Channel"}
                 self._show_channel_content(mock_team, mock_chan)
 
+    # Updates active tab and displays relevant notice messages based on the selected tab
     def _on_tab_changed(self, value: str):
         self.current_tab = value
         self._show_active_tab(value)
@@ -224,6 +231,7 @@ class TeamsView(ctk.CTkFrame):
                 text="‼️ IMPORTANT: When joining, if prompted, click Cancel ➔ 'Continue in this browser'.\nWhen asked for permissions, click 'Allow while visiting this site'."
             )
 
+    # Hides all tabs and displays the active one
     def _show_active_tab(self, tab_name: str):
         for view in (self.view_channels, self.view_chats, self.view_calls):
             view.grid_forget()
@@ -235,6 +243,7 @@ class TeamsView(ctk.CTkFrame):
         elif tab_name == "Calls":
             self.view_calls.grid(row=0, column=0, sticky="nsew")
 
+    # Grid layout for the Channels tab
     def _setup_channels_layout(self):
         self.view_channels.grid_columnconfigure(0, weight=1)
         self.view_channels.grid_columnconfigure(1, weight=3)
@@ -252,6 +261,7 @@ class TeamsView(ctk.CTkFrame):
         )
         self.channel_content_frame.grid(row=0, column=1, sticky="nsew", padx=(10, 0), pady=0)
 
+    # Grid layout for the Chats tab
     def _setup_chats_layout(self):
         self.view_chats.grid_columnconfigure(0, weight=1)
         self.view_chats.grid_columnconfigure(1, weight=3)
@@ -294,6 +304,7 @@ class TeamsView(ctk.CTkFrame):
             border_color=THEME["border"], border_width=1, corner_radius=10
         )
 
+    # Grid layout for the Calls tab
     def _setup_calls_layout(self):
         self.view_calls.grid_columnconfigure(0, weight=1)
         self.view_calls.grid_rowconfigure(0, weight=1)
@@ -304,6 +315,7 @@ class TeamsView(ctk.CTkFrame):
         )
         self.calls_list_frame.grid(row=0, column=0, sticky="nsew", pady=0)
 
+    # Clears data from UI across all tabs and displays a message 
     def load_data(self):
         if hasattr(self, "refresh_btn"):
             self.refresh_btn.configure(state="disabled", text="Syncing...")
@@ -320,6 +332,7 @@ class TeamsView(ctk.CTkFrame):
 
         threading.Thread(target=self._fetch_and_render, daemon=True).start()
 
+    # Fetches data from the backend and updates the UI accordingly
     def _fetch_and_render(self):
         try:
             data = teams_backend.fetch_dashboard_data()
@@ -327,6 +340,7 @@ class TeamsView(ctk.CTkFrame):
             data = {"teams": [], "chats": [], "calls": [], "errors": [str(e)], "debug": {}}
         self.after(0, lambda: self._render_ui(data))
 
+    # Renders error diagnostics in the UI when data fetching fails due to network or token issues
     def _render_error_diagnostics(self, frame, errors, debug_info):
         card = ctk.CTkFrame(frame, fg_color=THEME["card_bg"], border_color=THEME["border"], border_width=1, corner_radius=10)
         card.pack(fill="x", padx=10, pady=15, ipady=10)
@@ -345,6 +359,7 @@ class TeamsView(ctk.CTkFrame):
         )
         refresh_btn.pack(pady=(5, 10))
 
+    # Renders the main UI with fetched Teams data including teams channels chats and calls
     def _render_ui(self, data: dict):
         if hasattr(self, "refresh_btn"):
             self.refresh_btn.configure(state="normal", text="↻ Refresh")
@@ -522,6 +537,7 @@ class TeamsView(ctk.CTkFrame):
         ctk.CTkLabel(self.chat_messages_frame, text="Select a chat conversation on the left to view messages.",
                      text_color=THEME["text_secondary"]).pack(pady=50)
 
+    # Filters the chat list based on the search entered by the user
     def _filter_chats(self, event=None):
         query = self.chat_search_entry.get().strip().lower()
         if not query:
@@ -534,6 +550,7 @@ class TeamsView(ctk.CTkFrame):
         ]
         self._render_chat_list(filtered_chats)
 
+    # Renders and generates the chat list UI based on the provided chat data
     def _render_chat_list(self, chats_to_render):
         for child in self.chat_list_frame.winfo_children():
             child.destroy()
@@ -570,6 +587,7 @@ class TeamsView(ctk.CTkFrame):
                 w.bind("<Leave>", lambda e, c=card: c.configure(fg_color=THEME["card_bg"], border_color=THEME["border"]))
 
 
+    # Displays the content of a selected channel, including its posts and attachments
     def _show_channel_content(self, team, channel):
         for child in self.channel_content_frame.winfo_children(): child.destroy()
 
@@ -690,6 +708,7 @@ class TeamsView(ctk.CTkFrame):
 
         threading.Thread(target=_load_posts, daemon=True).start()
 
+    # Displays the message history of a selected chat and provides an input area for sending new messages
     def _show_chat_messages(self, chat):
         self.current_open_chat = chat
         for child in self.chat_messages_frame.winfo_children(): child.destroy()
@@ -792,6 +811,7 @@ class TeamsView(ctk.CTkFrame):
 
         threading.Thread(target=_load_history, daemon=True).start()
 
+    # Sends a chat message to the backend and updates the UI if successful or shows an error if it fails
     def _send_message(self):
         if not hasattr(self, "current_open_chat") or not self.current_open_chat:
             return
@@ -811,6 +831,7 @@ class TeamsView(ctk.CTkFrame):
 
         threading.Thread(target=_bg_send, daemon=True).start()
 
+    # Callback function that handles the result of sending a chat message updating the UI accordingly
     def _on_message_sent(self, success, original_text):
         if not self.chat_send_btn.winfo_exists(): return
 

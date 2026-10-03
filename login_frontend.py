@@ -19,7 +19,7 @@ except ImportError:
     print("⚠️ Warning: Could not locate login_backend.py automatically. Make sure the folder path is correct.")
 
 # ==========================================
-# DESIGN SYSTEM & COLOR PALETTE
+# DESIGN SYSTEM & COLORING
 # ==========================================
 THEME = {
     "bg_dark": "#121216",
@@ -38,19 +38,20 @@ THEME = {
     "warning_yellow": "#EAB308"
 }
 
-# SETTING UP CUSTOMTKINTER APPEARANCE
+# CUSTOMTKINTER APPEARANCE
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
 class OtiumLoginApp(ctk.CTkFrame):
+    # Main card for the login interface, handling user input for email passowrd secret key and tooltip
     def __init__(self, master, on_success_callback=None, **kwargs):
-        # Match the main app background
+        # Main app background
         super().__init__(master, fg_color=THEME["bg_dark"], **kwargs)
 
         self.on_success_callback = on_success_callback
 
-        # STATE VARIABLES
+        # VARIABLES
         self.totp_timer_job = None
         self.active_secret = ""
 
@@ -61,7 +62,7 @@ class OtiumLoginApp(ctk.CTkFrame):
         self.target_y = 0
         self.target_x = 0
 
-        # 1. THE MAIN LOGIN CARD
+        # MAIN LOGIN CARD
         self.login_frame = ctk.CTkFrame(
             self,
             corner_radius=15,
@@ -71,7 +72,7 @@ class OtiumLoginApp(ctk.CTkFrame):
         )
         self.login_frame.place(relx=0.5, rely=0.5, relwidth=0.48, relheight=0.75, anchor="center")
 
-        # 2. TEXT ELEMENTS
+        # TEXT ELEMENTS
         self.title_label = ctk.CTkLabel(
             self.login_frame,
             text="OTIUM",
@@ -88,7 +89,7 @@ class OtiumLoginApp(ctk.CTkFrame):
         )
         self.motto_label.pack(pady=(0, 20))
 
-        # 3. INPUTS
+        # INPUT FIELDS
         self.email_entry = ctk.CTkEntry(
             self.login_frame, placeholder_text="Student Email Address", height=45,
             fg_color=THEME["bg_dark"], border_color=THEME["border"], text_color=THEME["text_primary"]
@@ -101,7 +102,7 @@ class OtiumLoginApp(ctk.CTkFrame):
         )
         self.password_entry.pack(pady=8, fill="x", padx=60)
 
-        # 4. SECURE KEY & TOOLTIP
+        # SECURE KEY & TOOLTIP
         self.key_frame = ctk.CTkFrame(self.login_frame, fg_color="transparent")
         self.key_frame.pack(pady=8, fill="x", padx=60)
 
@@ -191,14 +192,16 @@ class OtiumLoginApp(ctk.CTkFrame):
         )
         self.note_label.pack(side="bottom", pady=15)
 
-    # --- CLASS METHODS ---
+    # CLASS METHODS
 
+    # Drop-down animation for the tooltip box
     def animate_slide_down(self):
         if self.current_y < self.target_y:
             self.current_y += 5
             self.tooltip_box.place(x=self.target_x, y=self.current_y)
             self.animation_job = self.after(15, self.animate_slide_down)
 
+    #  Drop-up animation for the tooltip box
     def animate_slide_up(self):
         if self.current_y > self.target_y - 30:
             self.current_y -= 5
@@ -207,6 +210,7 @@ class OtiumLoginApp(ctk.CTkFrame):
         else:
             self.tooltip_box.place_forget()
 
+    # Toggles the toopltip box
     def toggle_tooltip(self, event):
         if self.animation_job is not None:
             self.after_cancel(self.animation_job)
@@ -223,9 +227,11 @@ class OtiumLoginApp(ctk.CTkFrame):
             self.animate_slide_down()
             self.is_tooltip_visible = True
 
+    # Opens YouTube link
     def open_youtube_link(self, event):
         webbrowser.open_new("https://youtu.be/MkJ3sdMjgwY?si=iXfsdcJRO2xLzUJw")
 
+    # Copies the current TOTP code to the clipboard when the status label is clicked
     def copy_code_to_clipboard(self, event):
         current_text = self.status_label.cget("text")
         if "TOTP:" in current_text:
@@ -234,6 +240,7 @@ class OtiumLoginApp(ctk.CTkFrame):
             self.clipboard_append(code)
             self.note_label.configure(text=f"📋 Copied code {code} to clipboard!", text_color=THEME["success_green"])
 
+    # Creates a timer that updates the TOTP code every second and displays it in the status label along with the time left until it expires
     def update_totp_live(self):
         if not self.active_secret:
             return
@@ -246,6 +253,7 @@ class OtiumLoginApp(ctk.CTkFrame):
         )
         self.totp_timer_job = self.after(1000, self.update_totp_live)
 
+    # Creates an error message on the login screen and resets the login button to its original state allowing the user to try logging in again
     def reset_to_login_screen(self, error_msg):
         if self.totp_timer_job:
             self.after_cancel(self.totp_timer_job)
@@ -270,6 +278,7 @@ class OtiumLoginApp(ctk.CTkFrame):
             command=self.handle_login_click
         )
 
+    # Cleans up the TOTP timer and triggers the success callback to switch frames in Main.py after a successful login
     def finish_login(self):
         """Triggers the success callback to switch frames in Main.py."""
         if self.totp_timer_job:
@@ -278,6 +287,7 @@ class OtiumLoginApp(ctk.CTkFrame):
         if self.on_success_callback:
             self.on_success_callback()
 
+    # Communicates with the backend to to try loggin in, if it fails it will call reset_to_login_screen to display the error message
     def execute_login_attempt(self, email, password, secret):
         success, message = login_backend.attempt_full_ebwise_login(email, password, secret)
 
@@ -292,6 +302,7 @@ class OtiumLoginApp(ctk.CTkFrame):
         else:
             self.after(0, lambda: self.reset_to_login_screen(message))
 
+    # Updates the login button to a "Verifying..." state and starts a background thread to attempt logging in with the provided credentials
     def handle_next_click(self):
         user_email = self.email_entry.get().strip()
         user_password = self.password_entry.get().strip()
@@ -309,6 +320,7 @@ class OtiumLoginApp(ctk.CTkFrame):
             daemon=True
         ).start()
 
+    # Reads the user input from the email password and secret key fields, validates their format, If invalid, it displays an error message on the status label.
     def handle_login_click(self):
         user_email = self.email_entry.get().strip()
         user_password = self.password_entry.get().strip()
@@ -330,7 +342,7 @@ class OtiumLoginApp(ctk.CTkFrame):
         )
 
 
-#Standalone runner for testing login_frontend individually
+# Standalone runner for testing login_frontend individually
 if __name__ == "__main__":
     root = ctk.CTk()
     root.geometry("900x650")

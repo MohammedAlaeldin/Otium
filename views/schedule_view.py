@@ -23,6 +23,7 @@ DAYS_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 
 
 class ScheduleView(ctk.CTkFrame):
+    # Main view for displaying the weekly schedule including a refresh button and a scrollable list of classes
     def __init__(self, parent):
         super().__init__(parent, fg_color=THEME["bg_dark"])
 
@@ -55,6 +56,7 @@ class ScheduleView(ctk.CTkFrame):
 
         self.load_data()
 
+    #  Loads schedule data in a separate thread to avoid blocking the UI and displays a loading message while fetching
     def load_data(self):
         if hasattr(self, "refresh_btn"):
             self.refresh_btn.configure(state="disabled", text="Syncing...")
@@ -70,6 +72,7 @@ class ScheduleView(ctk.CTkFrame):
 
         threading.Thread(target=self._fetch_and_render, daemon=True).start()
 
+    # Creates a new asyncio event loop to fetch the raw schedule data and then renders the UI with the results or shows an error if fetching fails
     def _fetch_and_render(self):
         try:
             loop = asyncio.new_event_loop()
@@ -79,6 +82,7 @@ class ScheduleView(ctk.CTkFrame):
         except Exception:
             self.after(0, lambda: self._render_error())
 
+    # Renders a card indicating that no classes were found for the selected period, along with a refresh button
     def _render_no_classes(self, message: str):
         """Shown when CLIC itself reports no classes for this period — a normal
         state (holidays, term break, light week), not a sync/connection problem,
@@ -107,6 +111,7 @@ class ScheduleView(ctk.CTkFrame):
         )
         refresh_btn.pack(pady=(10, 15))
 
+    # Creates a card indicating a connection problem and prompts the user to refresh 
     def _render_error(self):
         for child in self.schedule_list_frame.winfo_children():
             child.destroy()
@@ -132,6 +137,7 @@ class ScheduleView(ctk.CTkFrame):
         )
         refresh_btn.pack(pady=(10, 15))
 
+    # Reenables the refresh button and displays an error card indicating a connection problem when fetching schedule data fails
     def _render_ui(self, result: dict):
         if hasattr(self, "refresh_btn"):
             self.refresh_btn.configure(state="normal", text="↻ Refresh")
@@ -207,6 +213,7 @@ class ScheduleView(ctk.CTkFrame):
                 )
                 lbl.pack(padx=12, pady=12, fill="x", expand=True)
 
+    # Scans the ClIC 'By Date' linear list view and groups the 5 data points (Day, Time, Course Code, Session, Venue) into structured dictionaries, deduplicates them, and sorts them chronologically for display in the UI.
     def parse_data(self, raw_text):
         """Scans the 'By Date' linear list view and groups the 5 data points."""
         classes = []
@@ -222,14 +229,14 @@ class ScheduleView(ctk.CTkFrame):
         while i < len(lines):
             line = lines[i]
 
-            # 1. Day Header (e.g. 'Thursday September 3')
+            # Day Header
             day_match = days_pattern.match(line)
             if day_match:
                 current_day = day_match.group(1).capitalize()
                 i += 1
                 continue
 
-            # 2. Time Block
+            # Time Block
             time_match = time_pattern.match(line)
             if time_match and current_day:
                 time_str = time_match.group(1)
@@ -248,7 +255,7 @@ class ScheduleView(ctk.CTkFrame):
                     else:
                         code = info_line
 
-                # Look ahead for 'Room:' (e.g. 'Room: CQCR3001-FCI Classroom')
+                # Look For 'Room:'
                 for offset in range(1, 4):
                     if i + offset < len(lines):
                         rm = room_pattern.match(lines[i + offset])
