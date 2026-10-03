@@ -459,7 +459,7 @@ class HomeView(ctk.CTkFrame):
         modal.attributes('-topmost', True)
         modal.grab_set()
 
-        # --- Apply Window Icon ---
+        # Apply the app Logo
         try:
             import sys
             base_dir = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.abspath(".")

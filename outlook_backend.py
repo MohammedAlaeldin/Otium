@@ -82,6 +82,7 @@ class OutlookBackend:
             )
             page = await context.new_page()
 
+            # Intercept the Playwright network request to extract the JWT Bearer token directly from the authorization headers
             async def intercept_headers(request):
                 try:
                     auth = request.headers.get("authorization", "")
@@ -130,6 +131,7 @@ class OutlookBackend:
     def _parse_outlook_time(self, utc_str):
         if not utc_str: return ""
         try:
+            # Strip fractional seconds and explicit UTC indicators before attempting standard datetime parsing
             clean_str = utc_str.split(".")[0].replace("Z", "").replace("+00:00", "")
             if "T" in clean_str:
                 dt = datetime.strptime(clean_str, "%Y-%m-%dT%H:%M:%S")
@@ -273,6 +275,7 @@ class OutlookBackend:
         res = requests.get(url, headers=self.headers, timeout=20)
         if res.status_code == 200:
             att = res.json()
+            ## Sanitize the attachment filename to prevent path traversal or filesystem errors during download
             if "ContentBytes" in att:
                 safe_name = "".join(c for c in att["Name"] if c.isalnum() or c in (' ', '.', '_', '-')).strip()
                 if not safe_name: safe_name = f"attachment_{attachment_id}.bin"

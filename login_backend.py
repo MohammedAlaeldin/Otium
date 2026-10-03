@@ -360,6 +360,7 @@ def generate_current_totp(secret_key: str):
         clean_secret = secret_key.replace(" ", "").strip()
         totp = pyotp.TOTP(clean_secret)
         code = totp.now()
+        # avoid rejection by cyclying the otp if there are less than 3 seconds remaining
         time_left = 30 - (int(time.time()) % 30)
         return code, time_left
     except Exception:

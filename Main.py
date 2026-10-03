@@ -75,7 +75,7 @@ class AppController(ctk.CTk):
         self.geometry("900x650")
         self.minsize(700, 500)
 
-        # --- FIX: Force Windows to use the logo for the Taskbar ---
+        # Force Windows to use the logo for the Taskbar
         try:
             if os.name == 'nt':
                 myappid = 'otium.academic.commandcenter.1.0'
@@ -215,7 +215,7 @@ class AppController(ctk.CTk):
         spinner.place(relx=0.5, rely=0.53, anchor="center")
         spinner.start()
 
-        # --- NEW: A label to display live background tasks ---
+        # A Label to display live background tasks
         self.status_label = ctk.CTkLabel(
             self.current_frame,
             text="",

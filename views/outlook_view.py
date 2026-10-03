@@ -59,7 +59,7 @@ class ComposeEmailModal(ctk.CTkToplevel):
         self.attributes('-topmost', True)
         self.configure(fg_color=THEME["bg_dark"])
 
-        # --- Apply Window Icon ---
+        # Apply the app Logo
         try:
             base_dir = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.abspath(".")
             ico_path = os.path.join(base_dir, "logo.ico")
@@ -633,7 +633,7 @@ class OutlookView(ctk.CTkFrame):
             att_frame = ctk.CTkFrame(card, fg_color="transparent")
             att_frame.pack(fill="x", padx=15, pady=5)
             self.load_attachments_ui(msg_id, att_frame)
-
+        # Strip hardcoded background colors from the email HTML to ensure text remains legible in dark mode
         safe_html = re.sub(r'(?i)bgcolor\s*=\s*["\']?[^"\'>\s]+["\']?', '', body_html)
         safe_html = re.sub(r'(?i)background\s*=\s*["\']?[^"\'>\s]+["\']?', '', safe_html)
 

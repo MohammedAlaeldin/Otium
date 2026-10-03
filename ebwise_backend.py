@@ -51,6 +51,7 @@ def _get_official_app_token(session: requests.Session, state: dict) -> str | Non
                 candidate_tokens.append(raw_val)
             else:
                 try:
+                    # Pad the base64 string to a multiple of 4 to prevent padding errors during decoding
                     padded_val = raw_val + "=" * ((4 - len(raw_val) % 4) % 4)
                     decoded = base64.b64decode(padded_val).decode("utf-8")
                     hex_matches = re.findall(r"[a-f0-9]{32}", decoded)

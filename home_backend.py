@@ -13,7 +13,7 @@ def _parse_flexible_datetime(dt_input):
     if not dt_input: return None
     if isinstance(dt_input, datetime):
         return dt_input.astimezone().replace(tzinfo=None)
-
+    # Flag UTC strings to ensure correct local timezone conversion after parsing
     dt_str = str(dt_input).strip()
     is_utc = dt_str.endswith("Z") or "+00:00" in dt_str
     clean_str = dt_str.split(".")[0].replace("Z", "").replace("+00:00", "")
